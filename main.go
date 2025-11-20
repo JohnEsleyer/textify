@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -24,6 +25,7 @@ type FileConfig struct {
 type AppConfig struct {
 	RootPath          string
 	OutputPath        string
+	DocsPath          string // Absolute path to the optional 'docs' folder
 	Matcher           gitignore.IgnoreMatcher
 	IncludeExtensions []string
 	ExcludeExtensions []string
@@ -78,10 +80,14 @@ func main() {
 	fmt.Printf("Textifying %s -> %s\n", absRoot, *outputFile)
 
 	absOutPath, _ := filepath.Abs(*outputFile)
+	
+	// Calculate absolute path for the docs folder
+	absDocsPath := filepath.Join(absRoot, "docs")
 
 	config := AppConfig{
 		RootPath:          absRoot,
 		OutputPath:        absOutPath,
+		DocsPath:          absDocsPath,
 		Matcher:           ignoreMatcher,
 		IncludeExtensions: fileConfig.IncludeExtensions,
 		ExcludeExtensions: fileConfig.ExcludeExtensions,
@@ -164,9 +170,22 @@ func walk(fullPath string, config AppConfig, writer *bufio.Writer) error {
 			continue
 		}
 
-		if config.Matcher.Match(entryPath, entry.IsDir()) {
-			continue
+		// --- FEATURE: Docs Exception ---
+		// We determine if we should skip gitignore checks for this entry.
+		// 1. If this specific directory IS the root 'docs' folder.
+		// 2. If we are currently walking INSIDE the 'docs' folder (fullPath has prefix DocsPath).
+		
+		isDocsRoot := (fullPath == config.RootPath && entry.Name() == "docs" && entry.IsDir())
+		isInsideDocs := strings.HasPrefix(fullPath, config.DocsPath)
+		shouldIgnoreGitRule := isDocsRoot || isInsideDocs
+
+		// Only check gitignore if we are NOT in the special docs context
+		if !shouldIgnoreGitRule {
+			if config.Matcher.Match(entryPath, entry.IsDir()) {
+				continue
+			}
 		}
+		// -------------------------------
 
 		if entry.IsDir() {
 			if err := walk(entryPath, config, writer); err != nil {
