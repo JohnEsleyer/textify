@@ -14,7 +14,7 @@ import (
 	"github.com/monochromegane/go-gitignore"
 )
 
-// FileConfig represents settings loaded from config.json
+// FileConfig represents settings loaded from textify.json
 type FileConfig struct {
 	IncludeExtensions []string `json:"include_extensions"`
 	ExcludeExtensions []string `json:"exclude_extensions"`
@@ -48,10 +48,11 @@ func main() {
 	// 1. Parse Flags
 	outputFile := flag.String("o", "codebase.txt", "The output text file path")
 	dirPath := flag.String("d", ".", "The root directory to scan")
-	configFile := flag.String("c", "config.json", "Path to configuration file")
+	// UPDATED: Default config name is now textify.json
+	configFile := flag.String("c", "textify.json", "Path to configuration file")
 	flag.Parse()
 
-	// 2. Load Config File (if it exists)
+	// 2. Load Config File (or create default if missing)
 	fileConfig := loadConfigFile(*configFile)
 
 	// 3. Resolve absolute path for accurate matching
@@ -67,9 +68,7 @@ func main() {
 		fmt.Printf("Error creating output file: %v\n", err)
 		os.Exit(1)
 	}
-	// We don't defer Close() here because we want to close it before counting words at the end
 	
-	// Use a buffered writer for better performance
 	writer := bufio.NewWriter(outFile)
 
 	// 5. Initialize GitIgnore matcher
@@ -78,7 +77,6 @@ func main() {
 	// 6. Start the recursive walk
 	fmt.Printf("Textifying %s -> %s\n", absRoot, *outputFile)
 
-	// Determine absolute path of output file to ensure we don't include it in itself
 	absOutPath, _ := filepath.Abs(*outputFile)
 
 	config := AppConfig{
@@ -94,11 +92,11 @@ func main() {
 		fmt.Printf("Error walking tree: %v\n", err)
 	}
 
-	// Flush and Close to ensure all data is on disk before counting
+	// Flush and Close
 	writer.Flush()
 	outFile.Close()
 
-	// 7. Calculate Word Count of the generated file
+	// 7. Calculate Word Count
 	totalWords, err := countWordsInFile(*outputFile)
 	if err != nil {
 		fmt.Printf("Done! (Could not calculate word count: %v)\n", err)
@@ -109,13 +107,24 @@ func main() {
 	}
 }
 
-// loadConfigFile attempts to read config.json
+// loadConfigFile attempts to read textify.json, or creates it with defaults if missing
 func loadConfigFile(path string) FileConfig {
 	var config FileConfig
 	
 	file, err := os.Open(path)
-	if err != nil {
-		// Config file is optional, return empty defaults
+	if os.IsNotExist(err) {
+		// File doesn't exist, create default settings
+		config.IncludeExtensions = []string{}
+		config.ExcludeExtensions = []string{".exe", ".dll", ".so", ".test", ".jpg", ".png", ".gif", ".sum"}
+		
+		data, _ := json.MarshalIndent(config, "", "  ")
+		
+		// Write to disk
+		if wErr := os.WriteFile(path, data, 0644); wErr == nil {
+			fmt.Printf("Created default configuration file: %s\n", path)
+		}
+		return config
+	} else if err != nil {
 		return config
 	}
 	defer file.Close()
@@ -147,33 +156,27 @@ func walk(fullPath string, config AppConfig, writer *bufio.Writer) error {
 	for _, entry := range entries {
 		entryPath := filepath.Join(fullPath, entry.Name())
 
-		// 1. Skip the .git directory
 		if entry.Name() == ".git" {
 			continue
 		}
 
-		// 2. Skip the output file itself if it's inside the directory
 		if entryPath == config.OutputPath {
 			continue
 		}
 
-		// 3. Check .gitignore
 		if config.Matcher.Match(entryPath, entry.IsDir()) {
 			continue
 		}
 
 		if entry.IsDir() {
-			// Recurse
 			if err := walk(entryPath, config, writer); err != nil {
 				return err
 			}
 		} else {
-			// 4. Check Extensions (Include/Exclude)
 			if shouldSkipExtension(entry.Name(), config) {
 				continue
 			}
 
-			// Process File
 			if err := appendFileContent(entryPath, config.RootPath, writer); err != nil {
 				fmt.Printf("Skipping %s: %v\n", entry.Name(), err)
 			}
@@ -182,18 +185,15 @@ func walk(fullPath string, config AppConfig, writer *bufio.Writer) error {
 	return nil
 }
 
-// shouldSkipExtension determines if a file should be ignored based on config
 func shouldSkipExtension(filename string, config AppConfig) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	// Check Excludes
 	for _, exclude := range config.ExcludeExtensions {
 		if strings.ToLower(exclude) == ext {
 			return true
 		}
 	}
 
-	// Check Includes (if defined, strictly enforce them)
 	if len(config.IncludeExtensions) > 0 {
 		found := false
 		for _, include := range config.IncludeExtensions {
@@ -202,61 +202,48 @@ func shouldSkipExtension(filename string, config AppConfig) bool {
 				break
 			}
 		}
-		// If we have an include list, and this file isn't in it, skip it
 		if !found {
 			return true
 		}
 	}
-
 	return false
 }
 
-// appendFileContent reads the file and writes it to the output writer with headers
 func appendFileContent(absPath, rootPath string, writer *bufio.Writer) error {
-	// Calculate relative path for cleaner display in the text file
 	relPath, err := filepath.Rel(rootPath, absPath)
 	if err != nil {
 		relPath = absPath
 	}
 
-	// Open the file
 	file, err := os.Open(absPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	// Check if binary
 	if isBinary(file) {
 		return nil 
 	}
 
-	// Reset file pointer to beginning after binary check
 	file.Seek(0, 0)
 
-	// Write Header
 	separator := strings.Repeat("-", 50)
 	fmt.Fprintf(writer, "%s\n", separator)
 	fmt.Fprintf(writer, "FILE: %s\n", relPath)
 	fmt.Fprintf(writer, "%s\n\n", separator)
 
-	// Copy Content
 	_, err = io.Copy(writer, file)
 	if err != nil {
 		return err
 	}
 
-	// Write Footer/Padding
 	fmt.Fprintf(writer, "\n\n")
-	
-	// Flush occasionally
 	writer.Flush()
 	
 	fmt.Printf("Added: %s\n", relPath)
 	return nil
 }
 
-// isBinary reads the first 512 bytes to determine if the file is likely binary
 func isBinary(file *os.File) bool {
 	buffer := make([]byte, 512)
 	n, err := file.Read(buffer)
@@ -282,7 +269,6 @@ func isBinary(file *os.File) bool {
 	return false
 }
 
-// countWordsInFile counts the number of words in a file
 func countWordsInFile(path string) (int, error) {
 	file, err := os.Open(path)
 	if err != nil {

@@ -1,118 +1,123 @@
 
 # Textify
 
-Textify is a CLI tool written in Go that converts a directory of source code (or any text files) into a single `.txt` file. This is particularly useful for creating context files to feed into Large Language Models (LLMs) or for documentation purposes.
+Textify is a lightweight CLI tool written in Go that converts a directory of source code (or text files) into a single `.txt` file. 
 
-It respects `.gitignore` rules, skips binary files, and provides flexible configuration for including or excluding specific file extensions.
+It is primarily designed to help developers strictly formatting entire codebases to provide context for **Large Language Models (LLMs)** like ChatGPT, Claude, or Llama, allowing for better code analysis and refactoring suggestions.
 
-## Features
+## ✨ Features
 
-- 🚀 **Single File Output**: Recursively walks a directory and concatenates files into one text file.
-- 🙈 **GitIgnore Support**: Automatically respects `.gitignore` rules in the root directory.
-- 🚫 **Binary Detection**: Automatically skips binary files (images, executables, etc.) to keep the output clean.
-- ⚙️ **Configurable**: Whitelist or blacklist specific file extensions via `config.json`.
-- 📊 **Word Counting**: Calculates the total word count of the generated codebase or any specified text file.
+- **📦 Single File Output**: Recursively walks a directory tree and concatenates all files into one readable text file.
+- **🙈 GitIgnore Support**: Automatically respects `.gitignore` rules to exclude build artifacts and hidden files.
+- **⚙️ Smart Configuration**: Auto-generates a `textify.json` file to manage included or excluded file extensions.
+- **🚫 Binary Protection**: Automatically detects and skips binary files (images, executables) to keep the output clean.
+- **📊 Word Counter**: Includes a built-in command to count words in your codebase, helping you estimate token usage.
 
-## Installation
+## 🛠️ Installation
 
 ### Prerequisites
-- [Go 1.18+](https://go.dev/dl/)
+- [Go 1.18+](https://go.dev/dl/) installed on your machine.
 
-### Build
-Clone the repository and build the binary:
+### Build from Source
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/textify.git
+   cd textify
+   ```
+
+2. Build the binary:
+   ```bash
+   go build -o textify .
+   ```
+
+3. (Optional) Move to your PATH:
+   ```bash
+   mv textify /usr/local/bin/
+   ```
+
+## 🚀 Usage
+
+### 1. Generate Codebase File
+Run the tool in the root of your project. If `textify.json` does not exist, it will be created automatically with default settings.
 
 ```bash
-go build -o textify .
-```
-
-## Usage
-
-### 1. Generate Codebase Text File
-By default, running the tool scans the current directory and outputs to `codebase.txt`.
-
-```bash
-# Run with default settings
+# Run in current directory, outputs to codebase.txt
 ./textify
 
-# Specify a root directory and output file
-./textify -d /path/to/project -o my-project-code.txt
+# Scan a specific directory
+./textify -d /path/to/my/project
 
-# Specify a custom configuration file
-./textify -c my-config.json
+# Output to a specific filename
+./textify -o full_context.txt
 ```
 
-**Flags:**
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-d` | `.` | The root directory to scan. |
-| `-o` | `codebase.txt` | The output text file path. |
-| `-c` | `config.json` | Path to the configuration JSON file. |
-
-### 2. Word Count Command
-You can use the `count` subcommand to count words in a text file without generating a new one.
+### 2. Count Words
+You can use the `count` subcommand to check the word count of a file without regenerating it. This is useful for checking if your context fits within an LLM's context window.
 
 ```bash
-# Count words in the default codebase.txt
+# Count words in the default output file (codebase.txt)
 ./textify count
 
 # Count words in a specific file
-./textify count ./path/to/document.txt
+./textify count my_context.txt
 ```
 
-*Note: When running the standard generation command, a word count summary is automatically displayed at the end.*
+*Note: A word count summary is also displayed automatically after every generation run.*
 
-## Configuration
+## ⚙️ Configuration (`textify.json`)
 
-You can control which files are processed by creating a `config.json` file in the directory where you run the tool.
+On the first run, Textify creates a `textify.json` file in the working directory. You can edit this to control exactly what gets included.
 
-### Example `config.json`
 ```json
 {
   "include_extensions": [],
-  "exclude_extensions": [".exe", ".dll", ".so", ".jpg", ".png", ".sum", ".test"]
+  "exclude_extensions": [
+    ".exe", ".dll", ".so", ".test", 
+    ".jpg", ".png", ".gif", ".sum"
+  ]
 }
 ```
 
-### Configuration Rules
+### How it works:
 
-1.  **exclude_extensions**:
-    *   Files with these extensions will **always** be skipped.
-    *   Case-insensitive (e.g., `.JPG` matches `.jpg`).
+1.  **`include_extensions` (Whitelist)**
+    *   If this list is **populated** (e.g., `[".go", ".js", ".md"]`), Textify will **ONLY** process files with these extensions. All other files are ignored.
+    *   If this list is **empty** `[]` (default), Textify will process **ALL** files.
 
-2.  **include_extensions**:
-    *   If this list is **empty** `[]`: The tool includes all files (except those in `exclude_extensions` or `.gitignore`).
-    *   If this list is **populated** (e.g., `[".go", ".md"]`): The tool will **only** include files matching these extensions. All other files are ignored.
+2.  **`exclude_extensions` (Blacklist)**
+    *   Files matching these extensions are always skipped.
+    *   Useful for skipping lock files (`.sum`, `.lock`) or media assets.
 
-## Output Format
+## 📝 CLI Options
 
-The generated text file separates files with a header for easy reading/parsing:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-d` | `.` | The root directory to scan. |
+| `-o` | `codebase.txt` | The output filename. |
+| `-c` | `textify.json` | Path to the configuration file. |
+
+## 📄 Output Format
+
+The generated file is formatted with clear separators to help LLMs distinguish between different files:
 
 ```text
 --------------------------------------------------
-FILE: main.go
+FILE: src/main.go
 --------------------------------------------------
 
 package main
-... content ...
 
-
---------------------------------------------------
-FILE: config/config.json
---------------------------------------------------
-
-{
-  ... content ...
+func main() {
+    println("Hello World")
 }
+
+
+--------------------------------------------------
+FILE: README.md
+--------------------------------------------------
+
+# My Project
+Documentation here...
 ```
 
-## Development
-
-To run the tool directly without building:
-
-```bash
-# Generate text file
-go run . -d ./my-project
-
-# Count words
-go run . count codebase.txt
-```
