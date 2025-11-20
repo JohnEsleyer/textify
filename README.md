@@ -1,4 +1,3 @@
-Here is a comprehensive `README.md` documentation for the `textify` tool.
 
 ***
 
