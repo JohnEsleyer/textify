@@ -1,136 +1,118 @@
-Here is a comprehensive `README.md` documentation for the `textify` tool.
-
-***
 
 # Textify
 
-**Textify** is a command-line utility written in Go that converts a directory of source code into a single, structured text file. It is designed primarily for developers who need to provide entire codebases as context to Large Language Models (LLMs) or for archiving/documentation purposes.
+Textify is a CLI tool written in Go that converts a directory of source code (or any text files) into a single `.txt` file. This is particularly useful for creating context files to feed into Large Language Models (LLMs) or for documentation purposes.
+
+It respects `.gitignore` rules, skips binary files, and provides flexible configuration for including or excluding specific file extensions.
 
 ## Features
 
-*   **Project Structure Visualization**: Automatically runs `lstree` to insert a visual tree diagram at the very top of the output file.
-*   **Smart Filtering**: Respects existing `.gitignore` files to exclude build artifacts, secrets, and dependencies (like `node_modules` or `.git`).
-*   **Extension Whitelisting**: Optional support for `.textify-config` to only include specific file types (e.g., only `.go` and `.md` files).
-*   **Binary Detection**: Automatically skips binary files (images, executables) to keep the output readable.
-*   **Clean Output**: clearly separates files with headers and separators.
-
-## Prerequisites
-
-1.  **Go 1.18+**: To compile the tool.
-2.  **lstree**: Textify expects the `lstree` command to be available in your system `$PATH` to generate the directory tree.
-    *   *Note: If `lstree` is not found, the tool will still generate file contents but will print a warning and skip the tree visualization.*
+- 🚀 **Single File Output**: Recursively walks a directory and concatenates files into one text file.
+- 🙈 **GitIgnore Support**: Automatically respects `.gitignore` rules in the root directory.
+- 🚫 **Binary Detection**: Automatically skips binary files (images, executables, etc.) to keep the output clean.
+- ⚙️ **Configurable**: Whitelist or blacklist specific file extensions via `config.json`.
+- 📊 **Word Counting**: Calculates the total word count of the generated codebase or any specified text file.
 
 ## Installation
 
-1.  Clone the repository or place the `main.go` file in a directory.
-2.  Initialize the module and install dependencies:
+### Prerequisites
+- [Go 1.18+](https://go.dev/dl/)
+
+### Build
+Clone the repository and build the binary:
 
 ```bash
-go mod init textify
-go get github.com/monochromegane/go-gitignore
-go mod tidy
-```
-
-3.  Build the binary:
-
-```bash
-go build -o textify main.go
-```
-
-4.  (Optional) Move the binary to your path so you can use it globally:
-
-```bash
-mv textify /usr/local/bin/
+go build -o textify .
 ```
 
 ## Usage
 
-### Basic Usage
-Run the tool in the current directory. This will generate a `codebase.txt` file by default.
+### 1. Generate Codebase Text File
+By default, running the tool scans the current directory and outputs to `codebase.txt`.
 
 ```bash
+# Run with default settings
 ./textify
+
+# Specify a root directory and output file
+./textify -d /path/to/project -o my-project-code.txt
+
+# Specify a custom configuration file
+./textify -c my-config.json
 ```
 
-### Specifying Directory and Output
-You can specify a target directory to scan and a custom output filename.
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-d` | `.` | The root directory to scan. |
+| `-o` | `codebase.txt` | The output text file path. |
+| `-c` | `config.json` | Path to the configuration JSON file. |
+
+### 2. Word Count Command
+You can use the `count` subcommand to count words in a text file without generating a new one.
 
 ```bash
-# Scan the 'src' folder and save to 'project_context.txt'
-./textify -d ./src -o project_context.txt
+# Count words in the default codebase.txt
+./textify count
+
+# Count words in a specific file
+./textify count ./path/to/document.txt
 ```
 
-### Flags
+*Note: When running the standard generation command, a word count summary is automatically displayed at the end.*
 
-| Flag | Description | Default |
-| :--- | :--- | :--- |
-| `-d` | The root directory to scan. | `.` (Current Directory) |
-| `-o` | The output text file path. | `codebase.txt` |
+## Configuration
 
----
+You can control which files are processed by creating a `config.json` file in the directory where you run the tool.
 
-## Configuration (.textify-config)
-
-You can control exactly which file types are included by creating a `.textify-config` file in the root of the directory you are scanning.
-
-If this file exists, **only** the file extensions listed inside it will be processed. If the file does not exist, Textify will include all text files that aren't ignored by `.gitignore`.
-
-### Example `.textify-config`
-Create a file named `.textify-config`:
-
-```text
-.go
-.md
-.yaml
-Dockerfile
+### Example `config.json`
+```json
+{
+  "include_extensions": [],
+  "exclude_extensions": [".exe", ".dll", ".so", ".jpg", ".png", ".sum", ".test"]
+}
 ```
 
-*   Lines starting with `#` are comments.
-*   Extensions can be written with or without the dot (e.g., `go` or `.go`).
-*   Exact filenames (like `Dockerfile`) are matched by exact name if they lack an extension logic.
+### Configuration Rules
 
----
+1.  **exclude_extensions**:
+    *   Files with these extensions will **always** be skipped.
+    *   Case-insensitive (e.g., `.JPG` matches `.jpg`).
+
+2.  **include_extensions**:
+    *   If this list is **empty** `[]`: The tool includes all files (except those in `exclude_extensions` or `.gitignore`).
+    *   If this list is **populated** (e.g., `[".go", ".md"]`): The tool will **only** include files matching these extensions. All other files are ignored.
 
 ## Output Format
 
-The generated text file is structured as follows:
-
-1.  **Tree View**: A visual representation of the folder structure (generated by `lstree`).
-2.  **File Contents**: The content of every matched file, separated by dividers.
-
-**Example Output:**
+The generated text file separates files with a header for easy reading/parsing:
 
 ```text
-.
-├── main.go
-├── go.mod
-└── README.md
-
-==================================================
-FILE CONTENTS
-==================================================
-
 --------------------------------------------------
 FILE: main.go
 --------------------------------------------------
 
 package main
-import "fmt"
-... (file content) ...
+... content ...
 
 
 --------------------------------------------------
-FILE: README.md
+FILE: config/config.json
 --------------------------------------------------
 
-# Project Title
-... (file content) ...
+{
+  ... content ...
+}
 ```
 
-## Troubleshooting
+## Development
 
-**`Warning: could not run 'lstree'`**
-Ensure that `lstree` is installed and accessible from your terminal. You can verify this by running `which lstree`.
+To run the tool directly without building:
 
-**Binary files appearing in output?**
-Textify attempts to detect binary files by checking for NUL bytes and invalid UTF-8 characters in the first 512 bytes of a file. If a specific file type is slipping through, add it to your `.gitignore` or use a `.textify-config` whitelist.
+```bash
+# Generate text file
+go run . -d ./my-project
+
+# Count words
+go run . count codebase.txt
+```
