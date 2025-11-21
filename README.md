@@ -1,6 +1,4 @@
-Here is the updated `README.md` reflecting the new features.
 
-```markdown
 # Textify
 
 Textify is a lightweight CLI tool written in Go that converts a directory of source code (or text files) into a single `.txt` file. 
@@ -11,8 +9,9 @@ It is primarily designed to help developers strictly format entire codebases to 
 
 - **📦 Single File Output**: Recursively walks a directory tree and concatenates all files into one readable text file.
 - **🙈 GitIgnore Support**: Automatically respects `.gitignore` rules to exclude build artifacts and hidden files.
+- **🚫 Manual Exclusions**: Configure specific folder or file paths to exclude via `textify.json` (e.g., `node_modules`, `secrets.txt`).
 - **📚 Context Injection (`docs/`)**: Automatically detects a root `docs` folder and includes its content **even if it is git-ignored**. This allows you to feed external documentation to the LLM without cluttering your git history.
-- **⚙️ Smart Configuration**: Auto-generates a `textify.json` file to manage included or excluded file extensions.
+- **⚙️ Smart Configuration**: Auto-generates a `textify.json` file to manage included or excluded file extensions and paths.
 - **🚫 Binary Protection**: Automatically detects and skips binary files (images, executables) to keep the output clean.
 - **📊 Word Counter**: Includes a built-in command to count words in your codebase, helping you estimate token usage.
 
@@ -95,6 +94,11 @@ On the first run, Textify creates a `textify.json` file in the working directory
   "exclude_extensions": [
     ".exe", ".dll", ".so", ".test", 
     ".jpg", ".png", ".gif", ".sum"
+  ],
+  "exclude_paths": [
+    "node_modules",
+    "vendor/heavy_lib",
+    "secrets.txt"
   ]
 }
 ```
@@ -109,12 +113,17 @@ On the first run, Textify creates a `textify.json` file in the working directory
     *   Files matching these extensions are always skipped.
     *   Useful for skipping lock files (`.sum`, `.lock`) or media assets.
 
+3.  **`exclude_paths` (Manual Exclusion)**
+    *   Allows you to exclude specific folders or files relative to the project root.
+    *   Example: `"node_modules"` will skip that entire folder. `"secrets.txt"` will skip that specific file.
+    *   These exclusions take precedence over other rules.
+
 ## 📝 CLI Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-d` | `.` | The root directory to scan. |
-| `-o` | `codebase.txt` | The output filename. |
+| Flag | Default        | Description                     |
+| ---- | -------------- | ------------------------------- |
+| `-d` | `.`            | The root directory to scan.     |
+| `-o` | `codebase.txt` | The output filename.            |
 | `-c` | `textify.json` | Path to the configuration file. |
 
 ## 📄 Output Format
@@ -138,5 +147,3 @@ package main
 func main() {
     println("Hello World")
 }
-```
-```

@@ -19,20 +19,22 @@ import (
 type FileConfig struct {
 	IncludeExtensions []string `json:"include_extensions"`
 	ExcludeExtensions []string `json:"exclude_extensions"`
+	ExcludePaths      []string `json:"exclude_paths"` // New field for specific files/folders
 }
 
 // AppConfig holds our runtime configuration
 type AppConfig struct {
 	RootPath          string
 	OutputPath        string
-	DocsPath          string // Absolute path to the optional 'docs' folder
+	DocsPath          string
 	Matcher           gitignore.IgnoreMatcher
 	IncludeExtensions []string
 	ExcludeExtensions []string
+	ExcludePaths      []string
 }
 
 func main() {
-	// 0. Check for Subcommands (e.g., "count")
+	// 0. Check for Subcommands
 	if len(os.Args) > 1 && os.Args[1] == "count" {
 		targetFile := "codebase.txt"
 		if len(os.Args) > 2 {
@@ -50,21 +52,20 @@ func main() {
 	// 1. Parse Flags
 	outputFile := flag.String("o", "codebase.txt", "The output text file path")
 	dirPath := flag.String("d", ".", "The root directory to scan")
-	// UPDATED: Default config name is now textify.json
 	configFile := flag.String("c", "textify.json", "Path to configuration file")
 	flag.Parse()
 
-	// 2. Load Config File (or create default if missing)
+	// 2. Load Config File
 	fileConfig := loadConfigFile(*configFile)
 
-	// 3. Resolve absolute path for accurate matching
+	// 3. Resolve absolute path
 	absRoot, err := filepath.Abs(*dirPath)
 	if err != nil {
 		fmt.Printf("Error resolving path: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 4. Create the output file
+	// 4. Create output file
 	outFile, err := os.Create(*outputFile)
 	if err != nil {
 		fmt.Printf("Error creating output file: %v\n", err)
@@ -76,12 +77,10 @@ func main() {
 	// 5. Initialize GitIgnore matcher
 	ignoreMatcher := getIgnoreMatcher(absRoot)
 
-	// 6. Start the recursive walk
+	// 6. Start recursive walk
 	fmt.Printf("Textifying %s -> %s\n", absRoot, *outputFile)
 
 	absOutPath, _ := filepath.Abs(*outputFile)
-	
-	// Calculate absolute path for the docs folder
 	absDocsPath := filepath.Join(absRoot, "docs")
 
 	config := AppConfig{
@@ -91,6 +90,7 @@ func main() {
 		Matcher:           ignoreMatcher,
 		IncludeExtensions: fileConfig.IncludeExtensions,
 		ExcludeExtensions: fileConfig.ExcludeExtensions,
+		ExcludePaths:      fileConfig.ExcludePaths,
 	}
 
 	err = walk(absRoot, config, writer)
@@ -98,7 +98,6 @@ func main() {
 		fmt.Printf("Error walking tree: %v\n", err)
 	}
 
-	// Flush and Close
 	writer.Flush()
 	outFile.Close()
 
@@ -113,19 +112,18 @@ func main() {
 	}
 }
 
-// loadConfigFile attempts to read textify.json, or creates it with defaults if missing
 func loadConfigFile(path string) FileConfig {
 	var config FileConfig
 	
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
-		// File doesn't exist, create default settings
+		// Create default settings
 		config.IncludeExtensions = []string{}
 		config.ExcludeExtensions = []string{".exe", ".dll", ".so", ".test", ".jpg", ".png", ".gif", ".sum"}
+		config.ExcludePaths = []string{} // Default empty list
 		
 		data, _ := json.MarshalIndent(config, "", "  ")
 		
-		// Write to disk
 		if wErr := os.WriteFile(path, data, 0644); wErr == nil {
 			fmt.Printf("Created default configuration file: %s\n", path)
 		}
@@ -142,7 +140,6 @@ func loadConfigFile(path string) FileConfig {
 	return config
 }
 
-// getIgnoreMatcher attempts to load .gitignore from the root path.
 func getIgnoreMatcher(root string) gitignore.IgnoreMatcher {
 	gitignorePath := filepath.Join(root, ".gitignore")
 	matcher, err := gitignore.NewGitIgnore(gitignorePath)
@@ -152,7 +149,6 @@ func getIgnoreMatcher(root string) gitignore.IgnoreMatcher {
 	return matcher
 }
 
-// walk recursively processes the tree
 func walk(fullPath string, config AppConfig, writer *bufio.Writer) error {
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
@@ -162,30 +158,34 @@ func walk(fullPath string, config AppConfig, writer *bufio.Writer) error {
 	for _, entry := range entries {
 		entryPath := filepath.Join(fullPath, entry.Name())
 
+		// 1. Skip .git and output file
 		if entry.Name() == ".git" {
 			continue
 		}
-
 		if entryPath == config.OutputPath {
 			continue
 		}
 
-		// --- FEATURE: Docs Exception ---
-		// We determine if we should skip gitignore checks for this entry.
-		// 1. If this specific directory IS the root 'docs' folder.
-		// 2. If we are currently walking INSIDE the 'docs' folder (fullPath has prefix DocsPath).
-		
+		// 2. Check Manual Exclusions (NEW)
+		// Calculate path relative to root to match config settings
+		relPath, err := filepath.Rel(config.RootPath, entryPath)
+		if err == nil {
+			if shouldExcludePath(relPath, config.ExcludePaths) {
+				continue
+			}
+		}
+
+		// 3. Docs Exception Logic
 		isDocsRoot := (fullPath == config.RootPath && entry.Name() == "docs" && entry.IsDir())
 		isInsideDocs := strings.HasPrefix(fullPath, config.DocsPath)
 		shouldIgnoreGitRule := isDocsRoot || isInsideDocs
 
-		// Only check gitignore if we are NOT in the special docs context
+		// 4. Check GitIgnore (unless in docs)
 		if !shouldIgnoreGitRule {
 			if config.Matcher.Match(entryPath, entry.IsDir()) {
 				continue
 			}
 		}
-		// -------------------------------
 
 		if entry.IsDir() {
 			if err := walk(entryPath, config, writer); err != nil {
@@ -202,6 +202,17 @@ func walk(fullPath string, config AppConfig, writer *bufio.Writer) error {
 		}
 	}
 	return nil
+}
+
+// shouldExcludePath checks if the current relative path matches the blocklist
+func shouldExcludePath(relPath string, excludes []string) bool {
+	relPath = filepath.Clean(relPath)
+	for _, exclude := range excludes {
+		if relPath == filepath.Clean(exclude) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldSkipExtension(filename string, config AppConfig) bool {
@@ -309,3 +320,4 @@ func countWordsInFile(path string) (int, error) {
 
 	return count, nil
 }
+
