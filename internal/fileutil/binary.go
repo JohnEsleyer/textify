@@ -7,7 +7,7 @@ import (
 )
 
 // IsBinary checks if a file is binary by reading its first 512 bytes.
-// It checks for NUL bytes or invalid UTF-8 sequences.
+// It looks for NUL bytes or invalid UTF-8 sequences.
 func IsBinary(path string) (bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
