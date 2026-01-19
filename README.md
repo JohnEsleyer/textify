@@ -23,12 +23,12 @@ It flattens your project structure into a single, well-formatted text file. Inst
 If you have Go installed, this is the fastest way to get started:
 
 ```bash
-go install github.com/yourusername/textify/cmd/textify@latest
+go install github.com/JohnEsleyer/textify/cmd/textify@latest
 ```
 
 ### Option 2: Build from Source
 ```bash
-git clone https://github.com/yourusername/textify.git
+git clone https://github.com/JohnEsleyer/textify.git
 cd textify
 go build -o textify ./cmd/textify
 ```
