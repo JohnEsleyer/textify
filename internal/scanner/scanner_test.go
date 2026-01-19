@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"textify/internal/config"
+	"github.com/JohnEsleyer/textify/internal/config"
 )
 
 func TestScanWithConfig(t *testing.T) {

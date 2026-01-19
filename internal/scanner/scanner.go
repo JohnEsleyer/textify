@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"textify/internal/config"
-	"textify/internal/fileutil"
+	"github.com/JohnEsleyer/textify/internal/config"
+	"github.com/JohnEsleyer/textify/internal/fileutil"
 
 	"github.com/monochromegane/go-gitignore"
 )

@@ -1,4 +1,4 @@
-module textify
+module github.com/JohnEsleyer/textify
 
 go 1.18
 

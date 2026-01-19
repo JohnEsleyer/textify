@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"textify/internal/config"
-	"textify/internal/scanner"
+	"github.com/JohnEsleyer/textify/internal/config"
+	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
 const configFile = "textify.toml"

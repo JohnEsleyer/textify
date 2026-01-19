@@ -8,8 +8,7 @@ import (
 )
 
 func TestDefaultConfig(t *testing.T) {
-	cwd := "/tmp/test"
-	cfg := DefaultConfig(cwd)
+	cfg := DefaultConfig()
 
 	if cfg.OutputFile != "codebase.txt" {
 		t.Errorf("Expected default output codebase.txt, got %s", cfg.OutputFile)
