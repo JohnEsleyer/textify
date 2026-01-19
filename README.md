@@ -1,106 +1,119 @@
 # Textify
-Textify is a lightweight CLI tool written in Go that converts a directory of source code (or text files) into a single `.txt` file. 
-It is primarily designed to help developers strictly format entire codebases to provide context for **Large Language Models (LLMs)** like ChatGPT, Claude, or Llama, allowing for better code analysis and refactoring suggestions.
-## ✨ Features
-- **📦 Single File Output**: Recursively walks a directory tree and concatenates all files into one readable text file.- **🙈 GitIgnore Support**: Automatically respects `.gitignore` rules to exclude build artifacts and hidden files.- **🚫 Manual Exclusions**: Configure specific file paths or paths relative to the project root to exclude via `textify.json`.- **📚 Context Injection (`docs/`)**: Automatically detects a root `docs` folder and includes its content **even if it is git-ignored**. This allows you to feed external documentation to the LLM without cluttering your git history.- **⚙️ Smart Configuration**: Auto-generates a `textify.json` file to manage included file extensions and paths.- **🚫 Binary Protection**: Automatically detects and skips binary files (images, executables) to keep the output clean.- **📊 Word Counter**: Includes a built-in command to count words in your codebase, helping you estimate token usage.
-## 🛠️ Installation
-### Prerequisites- [Go 1.18+](https://go.dev/dl/) installed on your machine.
-### Build from Source
-1. Clone the repository:   ```bash   git clone https://github.com/yourusername/textify.git   cd textify
 
+**Textify** is a professional-grade CLI tool designed to "flatten" complex directory structures into a single, well-formatted text document. 
 
-Build the binary:
-go build -o textify .
+It is specifically built for developers who need to feed their codebase into Large Language Models (LLMs) like ChatGPT, Claude, or Gemini. Instead of manually copy-pasting dozens of files, Textify gathers your entire project—respecting your `.gitignore` and skipping binary noise—into one clean file with clear headers.
 
+---
 
-(Optional) Move to your PATH:
-mv textify /usr/local/bin/
+## 🚀 Key Features
 
+-   **AI-Ready Output:** Automatically labels every code block with its relative file path, allowing LLMs to understand your project architecture instantly.
+-   **Smart Filtering:** Native support for `.gitignore`. It automatically excludes dependencies (like `node_modules`) and build artifacts.
+-   **Force-Include Override:** Use the `-i` flag to include specific files (like `.env.example` or hidden configs) that are normally ignored.
+-   **Binary Protection:** Automatically detects and skips images, PDFs, and compiled binaries (like `.exe` or `.pyc`) to keep your output clean.
+-   **Self-Aware Exclusions:** Hardcoded logic to ensure it never "scans itself." It automatically ignores common output names like `codebase.txt` and `textify.txt`.
 
-🚀 Usage
-1. Generate Codebase File
-Run the tool in the root of your project. If textify.json does not exist, it will be created automatically with default settings.
-# Run in current directory, outputs to codebase.txt./textify
-# Scan a specific directory./textify -d /path/to/my/project
-# Output to a specific filename./textify -o full_context.txt
-2. Count Words
-You can use the count subcommand to check the word count of a file without regenerating it. This is useful for checking if your context fits within an LLM's context window.
-# Count words in the default output file (codebase.txt)./textify count
-# Count words in a specific file./textify count my_context.txt
-Note: A word count summary is also displayed automatically after every generation run.
-📚 Injecting External Context (docs/)
-Textify has a special feature for handling external documentation.
-If you create a folder named docs in the root of your project, Textify will always include its contents in the output file, even if docs/ is listed in your .gitignore.
-Why is this useful?
-You often need to provide an LLM with context about libraries or frameworks you are using (e.g., "Here is the documentation for the specific physics engine I am using").
-The Workflow:
+---
 
-Create a docs/ folder in your project.
-Add docs/ to your .gitignore (so you don't commit huge text files to your repo).
-Paste text files, markdown, or API specs into that folder.
-Run textify.
+## 🛠 How to Build
 
-Textify will see that you have a docs folder, bypass the gitignore rule specifically for that folder, and include that context at the top of your prompt file.
-⚙️ Configuration (textify.json)
-On the first run, Textify creates a textify.json file in the working directory. You can edit this to control exactly what gets included.
-{  "include_extensions": [],  "include_folders": [],  "exclude_paths": [    "node_modules",    "vendor/heavy_lib",    "secrets.txt"  ]}
-How it works:
+To build the project locally, ensure you have [Go](https://go.dev/doc/install) installed (1.18+).
 
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/yourusername/textify.git
+    cd textify
+    ```
 
-include_extensions (Whitelist for Files)
+2.  **Compile the binary:**
+    ```bash
+    go build -o textify ./cmd/textify
+    ```
+    This creates a `textify` executable in your current folder.
 
-If this list is populated (e.g., [".go", ".js", ".md"]), Textify will ONLY process files with these extensions.
-If this list is empty [] (default), Textify will process ALL files (subject to binary protection).
+---
 
+## 🌍 Global Installation (Easy Access)
 
+To use `textify` from any directory on your system, you can move it to a global path and update your shell configuration.
 
-include_folders (Whitelist for Directories)
+### Option 1: The Go Way (Recommended)
+This is the fastest method. Go will compile and place the binary in your `$GOPATH/bin`.
 
-If this list is populated (e.g., ["src", "internal"]), Textify will ONLY scan files inside directories matching these relative paths (including subdirectories).
-If this list is empty [] (default), Textify scans all directories (subject to .gitignore and exclude_paths).
+```bash
+go install ./cmd/textify
+```
 
+If you haven't added Go's bin folder to your path yet, add this to your `~/.bashrc`:
+```bash
+export PATH=$PATH:$(go env GOPATH)/bin
+```
 
+### Option 2: Manual Move (Global Path)
+If you want to move it to a standard system directory:
 
-exclude_paths (Manual Exclusion)
+1.  **Move the binary:**
+    ```bash
+    sudo mv textify /usr/local/bin/
+    ```
 
-Allows you to exclude specific folders or files relative to the project root.
-Example: "node_modules" will skip that entire folder. "secrets.txt" will skip that specific file.
-These exclusions take precedence over all inclusion rules.
+2.  **Ensure `/usr/local/bin` is in your `~/.bashrc`:**
+    Open your `~/.bashrc` file:
+    ```bash
+    nano ~/.bashrc
+    ```
+    Add the following line at the bottom:
+    ```bash
+    export PATH="/usr/local/bin:$PATH"
+    ```
 
+3.  **Apply the changes:**
+    ```bash
+    source ~/.bashrc
+    ```
 
+Now you can simply type `textify` from anywhere!
 
-📝 CLI Options
+---
 
+## 📖 Usage
 
+### Basic Scan
+Generates a `codebase.txt` in the current directory containing all text files in the project.
+```bash
+textify -d .
+```
 
+### Custom Output and Force Includes
+Include a `.env` file that is normally ignored and save the output to a specific path.
+```bash
+textify -d ./my-project -o my_codebase.txt -i ".env"
+```
 
+### Flags
+- `-d`: The root directory to scan (default: `.`)
+- `-o`: The name of the output text file (default: `codebase.txt`)
+- `-i`: Comma-separated list of patterns to force include (e.g., `"*.env,secrets.yml"`)
 
+---
 
+## 🧪 Testing
 
+Textify comes with a robust test suite to ensure filtering and binary detection work as expected.
 
+```bash
+# Run all tests
+go test ./...
 
+# Run tests with coverage
+go test -cover ./...
+```
 
+---
 
+## 📁 Project Structure
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-FlagDefaultDescription-d.The root directory to scan.-ocodebase.txtThe output filename.-ctextify.jsonPath to the configuration file.
-📄 Output Format
-The generated file is formatted with clear separators to help LLMs distinguish between different files:
---------------------------------------------------FILE: docs/library_reference.txt--------------------------------------------------
-API Documentation v2.0...
-
---------------------------------------------------FILE: src/main.go--------------------------------------------------
-package main
-func main() {    println("Hello World")}// ...
+- `cmd/textify`: CLI entry point and flag parsing.
+- `internal/scanner`: Core logic for directory walking and filtering.
+- `internal/fileutil`: Utilities for binary detection and file safety.

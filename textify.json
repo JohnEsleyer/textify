@@ -1,13 +1,5 @@
 {
   "include_extensions": [],
-  "exclude_extensions": [
-    ".exe",
-    ".dll",
-    ".so",
-    ".test",
-    ".jpg",
-    ".png",
-    ".gif",
-    ".sum"
-  ]
+  "exclude_paths": [],
+  "include_folders": []
 }
