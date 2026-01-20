@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/fileutil"
 
@@ -22,7 +23,6 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
 	// Initial rule (Root ".")
 	rootRule, ok := cfg.Dirs["."]
 	if !ok {
-		// If root is missing from config, default to enabled but no extensions
 		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
@@ -37,25 +37,6 @@ func walk(
 	matcher gitignore.IgnoreMatcher,
 	writer *bufio.Writer,
 ) error {
-    
-    // Check if the directory we are currently IN has a specific rule
-	relDir, _ := filepath.Rel(rootPath, fullPath)
-	if relDir == "." {
-		relDir = "."
-	} else {
-		relDir = filepath.ToSlash(relDir)
-	}
-
-	if specificRule, exists := dirRules[relDir]; exists {
-		currentRule = specificRule
-	}
-
-    // 1. CHECK ENABLED STATUS
-    // If the directory is explicitly disabled in config, stop everything here.
-    if !currentRule.Enabled {
-        return nil // Skip this directory and its children
-    }
-
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return err
@@ -70,40 +51,56 @@ func walk(
 			continue
 		}
 
-		// Priority Check: Force Include
-		isForced := checkInclude(entry.Name(), relEntryPath, currentRule.Include)
+		// 1. Determine the Rule for this specific entry
+		//    We check if there is an explicit override in the YAML.
+		activeRule := currentRule // Default to inheriting parent settings
+		explicitRule, hasExplicit := dirRules[relEntryPath]
+		
+		if hasExplicit {
+			activeRule = explicitRule
+		}
+
+		// 2. Check Force Includes
+		//    (If it's force included, we skip gitignore and extension checks)
+		isForced := checkInclude(entry.Name(), relEntryPath, activeRule.Include)
 
 		if entry.IsDir() {
-            // Check if this specific SUBDIRECTORY has a rule that disables it
-            // before we even recurse or check gitignore.
-            if subRule, ok := dirRules[relEntryPath]; ok {
-                if !subRule.Enabled {
-                    continue 
-                }
-            }
+			// A. Explicit Disabled Check
+			//    If YAML explicitly says 'enabled: false', skip it regardless of gitignore
+			if hasExplicit && !activeRule.Enabled {
+				continue
+			}
 
+			// B. Gitignore Check
+			//    If NOT forced, check if git ignores this folder.
 			if !isForced && matcher.Match(entryPath, true) {
 				continue
 			}
-			
-			if err := walk(entryPath, rootPath, dirRules, currentRule, matcher, writer); err != nil {
+
+			// Recurse
+			if err := walk(entryPath, rootPath, dirRules, activeRule, matcher, writer); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// Process File
+		// 3. File Processing
+		
+		// A. Gitignore Check
 		if !isForced && matcher.Match(entryPath, false) {
 			continue
 		}
 
-		if !isForced && len(currentRule.Extensions) > 0 {
+		// B. Extension Check
+		//    If extensions are defined, the file must match.
+		if !isForced && len(activeRule.Extensions) > 0 {
 			ext := strings.TrimPrefix(filepath.Ext(entry.Name()), ".")
-			if !contains(currentRule.Extensions, ext) {
+			if !contains(activeRule.Extensions, ext) {
 				continue
 			}
 		}
 
+		// C. Write
 		if err := appendFileContent(entryPath, relEntryPath, writer); err != nil {
 			continue
 		}

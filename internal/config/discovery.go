@@ -9,9 +9,8 @@ import (
 	"github.com/monochromegane/go-gitignore"
 )
 
-// Discover populates the Config.Dirs map by scanning the file system.
-// It respects .gitignore to set the 'Enabled' boolean.
-// It preserves existing rules in existingCfg if provided.
+// Discover populates the Config.Dirs map by scanning ONLY top-level directories.
+// It aggregates extensions from subdirectories to ensure the top-level rule covers children.
 func Discover(root string, existingCfg *Config) (*Config, error) {
 	cfg := DefaultConfig()
 	if existingCfg != nil {
@@ -21,84 +20,97 @@ func Discover(root string, existingCfg *Config) (*Config, error) {
 		}
 	}
 
-	// Load gitignore logic
 	ignoreMatcher := getIgnoreMatcher(root)
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	// 1. Update Root (.) Rule
+	// We scan the *entire* project to find common extensions for the root fallback
+	rootExtensions := deepScanExtensions(root, root, ignoreMatcher)
+	
+	// Preserve existing root settings if they exist, otherwise update extensions
+	if val, ok := cfg.Dirs["."]; ok {
+		// Optional: Merge extensions if you want, or just keep user's. 
+		// For now, let's trust the user if they edited it, or update if empty.
+		if len(val.Extensions) == 0 {
+			val.Extensions = rootExtensions
+			cfg.Dirs["."] = val
+		}
+	} else {
+		cfg.Dirs["."] = DirRule{
+			Enabled:    true,
+			Extensions: rootExtensions,
+		}
+	}
+
+	// 2. Update Immediate Subdirectories (Depth 1)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == ".git" {
+			continue
+		}
+
+		// Check if ignored by git
+		fullPath := filepath.Join(root, entry.Name())
+		if ignoreMatcher.Match(fullPath, true) {
+			// If gitignored, DO NOT add to YAML. 
+			// The runtime scanner will skip it automatically.
+			continue
+		}
+
+		relPath := entry.Name() // Since we are at root, name is relPath
+
+		// If rule exists, respect it
+		if _, exists := cfg.Dirs[relPath]; exists {
+			continue
+		}
+
+		// Deep scan this specific folder to find all extensions used inside it
+		dirExtensions := deepScanExtensions(fullPath, root, ignoreMatcher)
+
+		// Create the rule
+		cfg.Dirs[relPath] = DirRule{
+			Enabled:    true,
+			Extensions: dirExtensions,
+		}
+	}
+
+	return &cfg, nil}
+
+// deepScanExtensions recursively walks a directory to find all unique file extensions
+// visible (not ignored by git).
+func deepScanExtensions(startPath, rootPath string, matcher gitignore.IgnoreMatcher) []string {
+	extMap := make(map[string]bool)
+
+	filepath.WalkDir(startPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return nil // ignore errors
 		}
 
-		// Calculate relative path for map key
-		relPath, _ := filepath.Rel(root, path)
-		if relPath == "." {
-			relPath = "."
-		} else {
-			relPath = filepath.ToSlash(relPath)
-		}
-
-		// Skip .git folder entirely
+		// Skip .git
 		if d.IsDir() && d.Name() == ".git" {
 			return filepath.SkipDir
 		}
 
-		// If entry already exists in config, we don't overwrite it
-		// except maybe to update extensions if we wanted to be very aggressive,
-		// but usually preserving user config is safer.
-		if _, exists := cfg.Dirs[relPath]; exists {
-			// If the user manually disabled it, we don't recurse if it's a dir
-			if !cfg.Dirs[relPath].Enabled && d.IsDir() {
+		// Check Gitignore
+		if matcher.Match(path, d.IsDir()) {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// Check GitIgnore
-		isIgnored := ignoreMatcher.Match(path, d.IsDir())
-
-		if d.IsDir() {
-			// If it's a directory
-			rule := DirRule{
-				Enabled: !isIgnored,
-			}
-
-			// If it's ignored (like node_modules), set Enabled=false and SKIP recursing
-			// This prevents adding 10,000 lines for node_modules subfolders
-			if isIgnored {
-				cfg.Dirs[relPath] = rule
-				return filepath.SkipDir
-			}
-
-			// If valid directory, detect extensions inside it (shallow check)
-			rule.Extensions = detectExtensions(path)
-			
-			// If no extensions found but it's a dir, we still add it but maybe it's empty
-			if len(rule.Extensions) > 0 {
-				cfg.Dirs[relPath] = rule
-			}
-		}
-
-		return nil
-	})
-
-	return &cfg, err
-}
-
-// detectExtensions scans the immediate files in a directory to gather extensions.
-func detectExtensions(dirPath string) []string {
-	extMap := make(map[string]bool)
-	entries, _ := os.ReadDir(dirPath)
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			ext := filepath.Ext(e.Name())
+		if !d.IsDir() {
+			ext := filepath.Ext(d.Name())
 			if len(ext) > 1 {
-				// Remove dot
 				cleanExt := strings.TrimPrefix(ext, ".")
 				extMap[cleanExt] = true
 			}
 		}
-	}
+		return nil
+	})
 
 	var extensions []string
 	for ext := range extMap {
