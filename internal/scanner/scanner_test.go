@@ -54,10 +54,12 @@ func TestScanWithConfig(t *testing.T) {
 		OutputFile: "codebase.txt",
 		Dirs: map[string]config.DirRule{
 			".": {
+				Enabled:    true,
 				Extensions: []string{"go", "md"},
 				Include:    []string{"secret.env"}, // Force include despite gitignore
 			},
 			"frontend": {
+				Enabled:    true,
 				Extensions: []string{"ts"}, // Override: only TS files here
 			},
 		},

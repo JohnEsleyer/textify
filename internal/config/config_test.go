@@ -14,8 +14,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("Expected default output codebase.txt, got %s", cfg.OutputFile)
 	}
 
-	if _, ok := cfg.Dirs["."]; !ok {
-		t.Error("Default config should have a root '.' rule")
+	if cfg.Dirs == nil {
+		t.Error("Default config should have an initialized Dirs map")
 	}
 }
 
@@ -27,7 +27,7 @@ func TestLoadAndSave(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	filePath := filepath.Join(tempDir, "test_config.toml")
+	filePath := filepath.Join(tempDir, "test_config.yaml")
 
 	// Create a dummy config
 	originalCfg := Config{

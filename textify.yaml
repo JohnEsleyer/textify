@@ -1,0 +1,40 @@
+# Textify Configuration
+#
+# output_file: Path where the merged codebase text will be saved.
+# dirs:        Directory-specific configurations. Keys are paths relative to root.
+#
+# Rule Options:
+#   enabled:    (bool)   If false, this directory and its children are skipped.
+#   extensions: ([list]) File extensions to include (e.g., [go, js, md]).
+#   include:    ([list]) Specific files to force-include (overrides .gitignore).
+#
+# Usage:
+#   - Run 'textify scan' to detect new folders and update this file.
+#   - Run 'textify start' to generate the output file.
+
+output_file: codebase.txt
+dirs:
+    .:
+        enabled: true
+        extensions:
+            - md
+            - txt
+            - mod
+            - sum
+            - gitignore
+    cmd/textify:
+        enabled: true
+        extensions:
+            - go
+    internal/config:
+        enabled: true
+        extensions:
+            - go
+    internal/fileutil:
+        enabled: true
+        extensions:
+            - go
+    internal/scanner:
+        enabled: true
+        extensions:
+            - go

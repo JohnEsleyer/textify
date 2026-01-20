@@ -14,7 +14,6 @@ import (
 )
 
 // Scan initiates the directory walk based on the provided configuration.
-// It writes the formatted content of valid files to the provided writer.
 func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
 	matcher := getIgnoreMatcher(rootPath)
 	bufWriter := bufio.NewWriter(writer)
@@ -23,15 +22,13 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
 	// Initial rule (Root ".")
 	rootRule, ok := cfg.Dirs["."]
 	if !ok {
-		// Fallback: If "." is missing, assume strict mode or empty defaults.
-		rootRule = config.DirRule{Extensions: []string{}}
+		// If root is missing from config, default to enabled but no extensions
+		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
 	return walk(rootPath, rootPath, cfg.Dirs, rootRule, matcher, bufWriter)
 }
 
-// walk recursively scans directories.
-// currentRule represents the active rule set (Extensions/Includes) for the current directory.
 func walk(
 	fullPath string,
 	rootPath string,
@@ -40,25 +37,28 @@ func walk(
 	matcher gitignore.IgnoreMatcher,
 	writer *bufio.Writer,
 ) error {
-
-	entries, err := os.ReadDir(fullPath)
-	if err != nil {
-		return err
-	}
-
-	// Calculate relative path for the directory we are currently IN
+    
+    // Check if the directory we are currently IN has a specific rule
 	relDir, _ := filepath.Rel(rootPath, fullPath)
 	if relDir == "." {
 		relDir = "."
 	} else {
-		relDir = filepath.ToSlash(relDir) // Ensure standard forward slashes for map keys
+		relDir = filepath.ToSlash(relDir)
 	}
 
-	// Context Switch:
-	// If the TOML has a specific entry for this folder, switch to that rule.
-	// Otherwise, continue using 'currentRule' (inherited from parent).
 	if specificRule, exists := dirRules[relDir]; exists {
 		currentRule = specificRule
+	}
+
+    // 1. CHECK ENABLED STATUS
+    // If the directory is explicitly disabled in config, stop everything here.
+    if !currentRule.Enabled {
+        return nil // Skip this directory and its children
+    }
+
+	entries, err := os.ReadDir(fullPath)
+	if err != nil {
+		return err
 	}
 
 	for _, entry := range entries {
@@ -66,36 +66,37 @@ func walk(
 		relEntryPath, _ := filepath.Rel(rootPath, entryPath)
 		relEntryPath = filepath.ToSlash(relEntryPath)
 
-		// 1. Mandatory Exclusions (e.g. .git, output file, config file)
 		if shouldAlwaysExclude(entry.Name()) {
 			continue
 		}
 
-		// 2. Priority Check: Force Include
-		// If it's in the 'include' list, we skip extension checks and gitignore.
+		// Priority Check: Force Include
 		isForced := checkInclude(entry.Name(), relEntryPath, currentRule.Include)
 
-		// 3. Process Directory
 		if entry.IsDir() {
-			// If not forced, respect gitignore
+            // Check if this specific SUBDIRECTORY has a rule that disables it
+            // before we even recurse or check gitignore.
+            if subRule, ok := dirRules[relEntryPath]; ok {
+                if !subRule.Enabled {
+                    continue 
+                }
+            }
+
 			if !isForced && matcher.Match(entryPath, true) {
 				continue
 			}
-			// Recurse
+			
 			if err := walk(entryPath, rootPath, dirRules, currentRule, matcher, writer); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// 4. Process File
-		// A. Check gitignore (if not forced)
+		// Process File
 		if !isForced && matcher.Match(entryPath, false) {
 			continue
 		}
 
-		// B. Check Extensions (if not forced and extensions are defined)
-		// If Extensions list is present, the file MUST match one of them.
 		if !isForced && len(currentRule.Extensions) > 0 {
 			ext := strings.TrimPrefix(filepath.Ext(entry.Name()), ".")
 			if !contains(currentRule.Extensions, ext) {
@@ -103,10 +104,7 @@ func walk(
 			}
 		}
 
-		// C. Write Content
 		if err := appendFileContent(entryPath, relEntryPath, writer); err != nil {
-			// Silently skip files we cannot read (e.g., permissions errors)
-			// to avoid halting the entire scan.
 			continue
 		}
 	}
@@ -125,7 +123,7 @@ func getIgnoreMatcher(root string) gitignore.IgnoreMatcher {
 
 // shouldAlwaysExclude handles hardcoded exclusions for tool integrity.
 func shouldAlwaysExclude(name string) bool {
-	return name == ".git" || name == "textify.toml" || name == "codebase.txt"
+	return name == ".git" || name == "textify.yaml" || name == "codebase.txt"
 }
 
 // checkInclude checks if the file matches any of the force-include patterns.

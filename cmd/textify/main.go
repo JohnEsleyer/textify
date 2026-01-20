@@ -1,17 +1,15 @@
-// Package main is the entry point for the Textify CLI tool.
-// It handles command-line arguments to initialize configuration
-// or start the codebase scanning process.
 package main
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const configFile = "textify.toml"
+const configFile = "textify.yaml"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -24,6 +22,8 @@ func main() {
 	switch command {
 	case "init":
 		runInit()
+	case "scan":
+		runScan() // New Command
 	case "start":
 		runStart()
 	default:
@@ -33,48 +33,66 @@ func main() {
 	}
 }
 
-// runInit scans the current directory and generates a default textify.toml file.
 func runInit() {
 	if _, err := os.Stat(configFile); err == nil {
-		fmt.Printf("Error: %s already exists in this directory.\n", configFile)
+		fmt.Printf("Error: %s already exists. Use 'textify scan' to update it.\n", configFile)
 		os.Exit(1)
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Printf("Error getting current working directory: %v\n", err)
+		panic(err)
+	}
+
+	fmt.Println("Initializing and scanning project structure...")
+
+	// Run Discovery with no existing config
+	cfg, err := config.Discover(cwd, nil)
+	if err != nil {
+		fmt.Printf("Error scanning directories: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("Scanning directory structure to generate configuration...")
-
-	// Create base config
-	cfg := config.DefaultConfig()
-
-	// Scan top-level directories to pre-populate the TOML with suggested defaults
-	entries, _ := os.ReadDir(cwd)
-	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != ".git" {
-			// Add a default entry for subdirectories.
-			// Empty Extensions implies inheritance or custom setup by the user.
-			cfg.Dirs[entry.Name()] = config.DirRule{
-				Extensions: []string{"go", "md", "txt", "js", "ts", "json"},
-				Include:    []string{},
-			}
-		}
-	}
-
+	// Save
 	if err := cfg.Save(configFile); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✔ Initialization complete. Created %s\n", configFile)
-	fmt.Println("  1. Edit the file to configure extensions and inclusions.")
-	fmt.Println("  2. Run 'textify start' to generate your output file.")
+	fmt.Printf("✔ Generated %s with %d directory rules.\n", configFile, len(cfg.Dirs))
 }
 
-// runStart reads the configuration and executes the scan.
+func runScan() {
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+
+	// 1. Load existing
+	existingCfg, err := config.Load(configFile)
+	if err != nil {
+		fmt.Printf("Error loading %s: %v\n", configFile, err)
+		return
+	}
+
+	fmt.Println("Rescanning project for new directories...")
+
+	// 2. Run Discovery (Merging into existing)
+	newCfg, err := config.Discover(cwd, existingCfg)
+	if err != nil {
+		fmt.Printf("Error scanning: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 3. Save
+	if err := newCfg.Save(configFile); err != nil {
+		fmt.Printf("Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✔ Updated %s. Total rules: %d\n", configFile, len(newCfg.Dirs))
+}
+
 func runStart() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -82,15 +100,12 @@ func runStart() {
 		os.Exit(1)
 	}
 
-	// Load Config
 	cfg, err := config.Load(configFile)
 	if err != nil {
 		fmt.Printf("Error loading %s: %v\n", configFile, err)
-		fmt.Println("Hint: Did you run 'textify init'?")
 		os.Exit(1)
 	}
 
-	// Resolve output path
 	outPath := cfg.OutputFile
 	if !filepath.IsAbs(outPath) {
 		outPath = filepath.Join(cwd, outPath)
@@ -116,6 +131,7 @@ func runStart() {
 func printHelp() {
 	fmt.Println("Textify - Turn your codebase into AI-ready text")
 	fmt.Println("\nUsage:")
-	fmt.Println("  textify init   Scans current folder and generates textify.toml")
-	fmt.Println("  textify start  Reads textify.toml and generates the output file")
+	fmt.Println("  textify init   Scans folders and generates textify.yaml")
+	fmt.Println("  textify scan   Detects new folders and updates textify.yaml")
+	fmt.Println("  textify start  Generates the output file based on config")
 }
