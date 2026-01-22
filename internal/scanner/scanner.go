@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/fileutil"
 
@@ -23,6 +22,7 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
 	// Initial rule (Root ".")
 	rootRule, ok := cfg.Dirs["."]
 	if !ok {
+		// If root is missing from config, default to enabled but no extensions
 		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
@@ -37,6 +37,25 @@ func walk(
 	matcher gitignore.IgnoreMatcher,
 	writer *bufio.Writer,
 ) error {
+    
+    // Check if the directory we are currently IN has a specific rule
+	relDir, _ := filepath.Rel(rootPath, fullPath)
+	if relDir == "." {
+		relDir = "."
+	} else {
+		relDir = filepath.ToSlash(relDir)
+	}
+
+	if specificRule, exists := dirRules[relDir]; exists {
+		currentRule = specificRule
+	}
+
+    // 1. CHECK ENABLED STATUS
+    // If the directory is explicitly disabled in config, stop everything here.
+    if !currentRule.Enabled {
+        return nil // Skip this directory and its children
+    }
+
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return err
@@ -46,61 +65,74 @@ func walk(
 		entryPath := filepath.Join(fullPath, entry.Name())
 		relEntryPath, _ := filepath.Rel(rootPath, entryPath)
 		relEntryPath = filepath.ToSlash(relEntryPath)
+		ext := strings.TrimPrefix(filepath.Ext(entry.Name()), ".")
 
+		// -----------------------------
+		// 1. SYSTEM EXCLUDES (Hardcoded)
+		// -----------------------------
 		if shouldAlwaysExclude(entry.Name()) {
 			continue
 		}
 
-		// 1. Determine the Rule for this specific entry
-		//    We check if there is an explicit override in the YAML.
-		activeRule := currentRule // Default to inheriting parent settings
-		explicitRule, hasExplicit := dirRules[relEntryPath]
-		
-		if hasExplicit {
-			activeRule = explicitRule
+		// -----------------------------
+		// 2. USER EXCLUDES (Specific Files/Patterns)
+		// Priority: High. If excluded here, it is skipped regardless of include rules.
+		// -----------------------------
+		if checkPatternMatch(entry.Name(), relEntryPath, currentRule.Exclude) {
+			continue
 		}
 
-		// 2. Check Force Includes
-		//    (If it's force included, we skip gitignore and extension checks)
-		isForced := checkInclude(entry.Name(), relEntryPath, activeRule.Include)
+		// -----------------------------
+		// 3. FORCE INCLUDE (Specific Files/Patterns)
+		// Priority: Overrides .gitignore and extension rules
+		// -----------------------------
+		isForced := checkPatternMatch(entry.Name(), relEntryPath, currentRule.Include)
 
 		if entry.IsDir() {
-			// A. Explicit Disabled Check
-			//    If YAML explicitly says 'enabled: false', skip it regardless of gitignore
-			if hasExplicit && !activeRule.Enabled {
-				continue
-			}
+            // Check if this specific SUBDIRECTORY has a rule that disables it
+            if subRule, ok := dirRules[relEntryPath]; ok {
+                if !subRule.Enabled {
+                    continue 
+                }
+            }
 
-			// B. Gitignore Check
-			//    If NOT forced, check if git ignores this folder.
+			// If not forced, respect gitignore for directories
 			if !isForced && matcher.Match(entryPath, true) {
 				continue
 			}
-
-			// Recurse
-			if err := walk(entryPath, rootPath, dirRules, activeRule, matcher, writer); err != nil {
+			
+			if err := walk(entryPath, rootPath, dirRules, currentRule, matcher, writer); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// 3. File Processing
-		
-		// A. Gitignore Check
+		// -----------------------------
+		// FILE PROCESSING LOGIC
+		// -----------------------------
+
+		// 4. GITIGNORE CHECK
+		// If not forced, check if ignored by git
 		if !isForced && matcher.Match(entryPath, false) {
 			continue
 		}
 
-		// B. Extension Check
-		//    If extensions are defined, the file must match.
-		if !isForced && len(activeRule.Extensions) > 0 {
-			ext := strings.TrimPrefix(filepath.Ext(entry.Name()), ".")
-			if !contains(activeRule.Extensions, ext) {
+		// 5. EXTENSION EXCLUDES (Blocklist)
+		if !isForced && len(currentRule.ExcludeExtensions) > 0 {
+			if contains(currentRule.ExcludeExtensions, ext) {
 				continue
 			}
 		}
 
-		// C. Write
+		// 6. EXTENSION INCLUDES (Allowlist)
+		// If Extensions list is provided, file MUST match one of them (unless forced)
+		if !isForced && len(currentRule.Extensions) > 0 {
+			if !contains(currentRule.Extensions, ext) {
+				continue
+			}
+		}
+
+		// Write content
 		if err := appendFileContent(entryPath, relEntryPath, writer); err != nil {
 			continue
 		}
@@ -123,16 +155,18 @@ func shouldAlwaysExclude(name string) bool {
 	return name == ".git" || name == "textify.yaml" || name == "codebase.txt"
 }
 
-// checkInclude checks if the file matches any of the force-include patterns.
-func checkInclude(name, relPath string, patterns []string) bool {
+// checkPatternMatch checks if the file matches any of the glob patterns.
+func checkPatternMatch(name, relPath string, patterns []string) bool {
 	for _, p := range patterns {
+		// Match against filename
 		if matched, _ := filepath.Match(p, name); matched {
 			return true
 		}
+		// Match against relative path
 		if matched, _ := filepath.Match(p, relPath); matched {
 			return true
 		}
-		// Direct folder match
+		// Direct folder/file path match
 		if p == relPath {
 			return true
 		}

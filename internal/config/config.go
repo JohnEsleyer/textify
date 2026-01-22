@@ -13,9 +13,11 @@ const configHeader = `# Textify Configuration
 # dirs:        Directory-specific configurations. Keys are paths relative to root.
 #
 # Rule Options:
-#   enabled:    (bool)   If false, this directory and its children are skipped.
-#   extensions: ([list]) File extensions to include (e.g., [go, js, md]).
-#   include:    ([list]) Specific files to force-include (overrides .gitignore).
+#   enabled:            (bool)   If false, this directory and its children are skipped.
+#   include:            ([list]) Specific files/globs to Force Include (overrides gitignore & extensions).
+#   exclude:            ([list]) Specific files/globs to Force Exclude (highest priority).
+#   extensions:         ([list]) Allow-list of extensions (e.g., [go, js]). If empty, all text files are allowed.
+#   exclude_extensions: ([list]) Block-list of extensions (e.g., [log, tmp]).
 #
 # Usage:
 #   - Run 'textify scan' to detect new folders and update this file.
@@ -29,11 +31,19 @@ type DirRule struct {
 	Enabled bool `yaml:"enabled"`
 
 	// Extensions is a list of file extensions to include (e.g., ["go", "md"]).
+	// If empty, all text files are considered (subject to exclusions).
 	Extensions []string `yaml:"extensions,omitempty"`
+
+	// ExcludeExtensions is a list of file extensions to specifically ignore.
+	ExcludeExtensions []string `yaml:"exclude_extensions,omitempty"`
 	
 	// Include is a list of specific files or patterns to force-include
 	// regardless of extension or gitignore rules.
 	Include []string `yaml:"include,omitempty"`
+
+	// Exclude is a list of specific files or patterns to force-exclude.
+	// This takes precedence over Include.
+	Exclude []string `yaml:"exclude,omitempty"`
 }
 
 // Config represents the top-level structure of the textify.yaml file.
