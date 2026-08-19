@@ -119,6 +119,59 @@ func TestMixedDirectoryRules(t *testing.T) {
 	assertNotContains(t, output, "FILE: frontend/style.css")
 }
 
+func TestSubfolderGitignoreAndDisabledSubdir(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_test_subfolder_ignore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	os.MkdirAll(filepath.Join(tempDir, "frontend", "src"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "frontend", "node_modules"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "frontend", "dist"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "services", "auth", "dist"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "services", "auth", "src"), 0755)
+
+	createFile(t, tempDir, "frontend/src/App.tsx", "tsx")
+	createFile(t, tempDir, "frontend/node_modules/pkg.js", "js")
+	createFile(t, tempDir, "frontend/dist/bundle.js", "js")
+	createFile(t, tempDir, "frontend/.gitignore", "node_modules\n")
+
+	createFile(t, tempDir, "services/auth/src/index.ts", "ts")
+	createFile(t, tempDir, "services/auth/dist/index.js", "js")
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled: true,
+			},
+			"frontend/dist": {
+				Enabled: false,
+			},
+			"services/auth/dist": {
+				Enabled: false,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Scan(tempDir, cfg, &buf); err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	output := buf.String()
+
+	assertContains(t, output, "FILE: frontend/src/App.tsx")
+	assertContains(t, output, "FILE: services/auth/src/index.ts")
+
+	// node_modules excluded by frontend/.gitignore
+	assertNotContains(t, output, "FILE: frontend/node_modules/pkg.js")
+	// frontend/dist excluded by Dirs rule
+	assertNotContains(t, output, "FILE: frontend/dist/bundle.js")
+	// services/auth/dist excluded by Dirs rule
+	assertNotContains(t, output, "FILE: services/auth/dist/index.js")
+}
+
 func createFile(t *testing.T, dir, name, content string) {
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {

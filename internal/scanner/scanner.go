@@ -7,15 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/fileutil"
-
-	"github.com/monochromegane/go-gitignore"
 )
 
 // Scan initiates the directory walk based on the provided configuration.
 func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
-	matcher := getIgnoreMatcher(rootPath)
+	chain := config.NewGitIgnoreChain(rootPath)
 	bufWriter := bufio.NewWriter(writer)
 	defer bufWriter.Flush()
 
@@ -26,7 +25,7 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
 		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
-	return walk(rootPath, rootPath, cfg.Dirs, rootRule, matcher, bufWriter)
+	return walk(rootPath, rootPath, cfg.Dirs, rootRule, chain, bufWriter)
 }
 
 func walk(
@@ -34,11 +33,11 @@ func walk(
 	rootPath string,
 	dirRules map[string]config.DirRule,
 	currentRule config.DirRule,
-	matcher gitignore.IgnoreMatcher,
+	ignoreChain config.GitIgnoreChain,
 	writer *bufio.Writer,
 ) error {
-    
-    // Check if the directory we are currently IN has a specific rule
+
+	// Check if the directory we are currently IN has a specific rule
 	relDir, _ := filepath.Rel(rootPath, fullPath)
 	if relDir == "." {
 		relDir = "."
@@ -50,11 +49,11 @@ func walk(
 		currentRule = specificRule
 	}
 
-    // 1. CHECK ENABLED STATUS
-    // If the directory is explicitly disabled in config, stop everything here.
-    if !currentRule.Enabled {
-        return nil // Skip this directory and its children
-    }
+	// 1. CHECK ENABLED STATUS
+	// If the directory is explicitly disabled in config, stop everything here.
+	if !currentRule.Enabled {
+		return nil // Skip this directory and its children
+	}
 
 	entries, err := os.ReadDir(fullPath)
 	if err != nil {
@@ -89,19 +88,20 @@ func walk(
 		isForced := checkPatternMatch(entry.Name(), relEntryPath, currentRule.Include)
 
 		if entry.IsDir() {
-            // Check if this specific SUBDIRECTORY has a rule that disables it
-            if subRule, ok := dirRules[relEntryPath]; ok {
-                if !subRule.Enabled {
-                    continue 
-                }
-            }
+			// Check if this specific SUBDIRECTORY has a rule that disables it
+			if subRule, ok := dirRules[relEntryPath]; ok {
+				if !subRule.Enabled {
+					continue
+				}
+			}
 
 			// If not forced, respect gitignore for directories
-			if !isForced && matcher.Match(entryPath, true) {
+			if !isForced && ignoreChain.Match(entryPath, true) {
 				continue
 			}
-			
-			if err := walk(entryPath, rootPath, dirRules, currentRule, matcher, writer); err != nil {
+
+			subChain := ignoreChain.AddIfExists(entryPath)
+			if err := walk(entryPath, rootPath, dirRules, currentRule, subChain, writer); err != nil {
 				return err
 			}
 			continue
@@ -113,7 +113,7 @@ func walk(
 
 		// 4. GITIGNORE CHECK
 		// If not forced, check if ignored by git
-		if !isForced && matcher.Match(entryPath, false) {
+		if !isForced && ignoreChain.Match(entryPath, false) {
 			continue
 		}
 
@@ -138,16 +138,6 @@ func walk(
 		}
 	}
 	return nil
-}
-
-// getIgnoreMatcher attempts to load .gitignore from the root path.
-func getIgnoreMatcher(root string) gitignore.IgnoreMatcher {
-	gitignorePath := filepath.Join(root, ".gitignore")
-	matcher, err := gitignore.NewGitIgnore(gitignorePath)
-	if err != nil {
-		return gitignore.NewGitIgnoreFromReader(root, strings.NewReader(""))
-	}
-	return matcher
 }
 
 // shouldAlwaysExclude handles hardcoded exclusions for tool integrity.
