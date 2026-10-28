@@ -133,7 +133,7 @@ func walk(
 		}
 
 		// Write content
-		if err := appendFileContent(entryPath, relEntryPath, writer); err != nil {
+		if err := appendFileContent(entryPath, relEntryPath, currentRule, writer); err != nil {
 			continue
 		}
 	}
@@ -174,7 +174,7 @@ func contains(slice []string, item string) bool {
 }
 
 // appendFileContent writes the file header and content to the buffer.
-func appendFileContent(absPath, relPath string, writer *bufio.Writer) error {
+func appendFileContent(absPath, relPath string, rule config.DirRule, writer *bufio.Writer) error {
 	// Check for binary content
 	isBin, err := fileutil.IsBinary(absPath)
 	if err != nil || isBin {
@@ -192,11 +192,29 @@ func appendFileContent(absPath, relPath string, writer *bufio.Writer) error {
 	fmt.Fprintf(writer, "FILE: %s\n", relPath)
 	fmt.Fprintf(writer, "%s\n\n", separator)
 
-	if _, err = io.Copy(writer, file); err != nil {
-		return err
+	if rule.Compact {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			// Keep non-empty lines that look like structural signatures/declarations,
+			// or strip full block bodies to save tokens.
+			if line != "" {
+				fmt.Fprintln(writer, line)
+			}
+		}
+	} else {
+		if _, err = io.Copy(writer, file); err != nil {
+			return err
+		}
 	}
+
 	fmt.Fprintf(writer, "\n\n")
 
-	fmt.Printf("Added: %s\n", relPath)
+	fmt.Printf("Added: %s%s\n", relPath, func() string {
+		if rule.Compact {
+			return " (compacted)"
+		}
+		return ""
+	}())
 	return nil
 }

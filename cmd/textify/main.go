@@ -9,6 +9,7 @@ import (
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
+const version = "0.2.0"
 const configFile = "textify.yaml"
 
 func main() {
@@ -23,9 +24,11 @@ func main() {
 	case "init":
 		runInit()
 	case "scan":
-		runScan() // New Command
+		runScan()
 	case "start":
 		runStart()
+	case "version", "-v", "--version":
+		fmt.Printf("textify %s\n", version)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printHelp()
@@ -131,7 +134,8 @@ func runStart() {
 func printHelp() {
 	fmt.Println("Textify - Turn your codebase into AI-ready text")
 	fmt.Println("\nUsage:")
-	fmt.Println("  textify init   Scans folders and generates textify.yaml")
-	fmt.Println("  textify scan   Detects new folders and updates textify.yaml")
-	fmt.Println("  textify start  Generates the output file based on config")
+	fmt.Println("  textify init     Scans folders and generates textify.yaml")
+	fmt.Println("  textify scan     Detects new folders and updates textify.yaml")
+	fmt.Println("  textify start    Generates the output file based on config")
+	fmt.Println("  textify version  Shows the current version")
 }

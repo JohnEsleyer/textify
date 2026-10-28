@@ -14,6 +14,7 @@ const configHeader = `# Textify Configuration
 #
 # Rule Options:
 #   enabled:            (bool)   If false, this directory and its children are skipped.
+#   compact:            (bool)   If true, strips extra whitespace and condenses formatting to save LLM tokens.
 #   include:            ([list]) Specific files/globs to Force Include (overrides gitignore & extensions).
 #   exclude:            ([list]) Specific files/globs to Force Exclude (highest priority).
 #   extensions:         ([list]) Allow-list of extensions (e.g., [go, js]). If empty, all text files are allowed.
@@ -30,13 +31,16 @@ type DirRule struct {
 	// Enabled determines if this directory is scanned at all.
 	Enabled bool `yaml:"enabled"`
 
+	// Compact strips extra whitespace and non-essential lines to save LLM tokens.
+	Compact bool `yaml:"compact,omitempty"`
+
 	// Extensions is a list of file extensions to include (e.g., ["go", "md"]).
 	// If empty, all text files are considered (subject to exclusions).
 	Extensions []string `yaml:"extensions,omitempty"`
 
 	// ExcludeExtensions is a list of file extensions to specifically ignore.
 	ExcludeExtensions []string `yaml:"exclude_extensions,omitempty"`
-	
+
 	// Include is a list of specific files or patterns to force-include
 	// regardless of extension or gitignore rules.
 	Include []string `yaml:"include,omitempty"`
