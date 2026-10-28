@@ -41,7 +41,18 @@ sudo mv textify /usr/local/bin/
 
 ## 📖 How to Use
 
-Textify uses a three-step workflow: **Initialize**, **Refine**, and **Start**.
+Textify outputs code using XML-style tags with line-number metadata:
+
+```xml
+<file path="cmd/textify/main.go" lines="1-120">
+    1 | package main
+    2 |
+    3 | import (
+    4 |     "fmt"
+...
+  120 | }
+</file>
+```
 
 ### 1. Initialize
 Navigate to your project root and run:

@@ -74,7 +74,7 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 		fmt.Fprintln(bufWriter, strings.Repeat("=", 60)+"\n")
 	}
 
-	format := "raw"
+	format := "tags"
 	if cfg.Format != "" {
 		format = cfg.Format
 	}
@@ -308,8 +308,10 @@ func appendFileContent(
 		content, redactedCount = fileutil.RedactSecrets(content)
 	}
 
+	origLines := strings.Split(string(rawBytes), "\n")
+	totalLines := len(origLines)
+
 	lines := strings.Split(content, "\n")
-	totalLines := len(lines)
 	if !signaturesOnly {
 		var numbered strings.Builder
 		for idx, line := range lines {
@@ -325,23 +327,29 @@ func appendFileContent(
 }
 
 func renderFormattedEntry(relPath, content, format string, startLine, endLine int) string {
-	lineRangeDesc := ""
+	lineAttr := ""
 	if startLine > 0 && endLine > 0 {
-		lineRangeDesc = fmt.Sprintf(" (Lines %d-%d)", startLine, endLine)
+		lineAttr = fmt.Sprintf(" lines=\"%d-%d\"", startLine, endLine)
 	}
 
-	var formatted strings.Builder
 	switch strings.ToLower(format) {
 	case "markdown", "md":
 		ext := strings.TrimPrefix(filepath.Ext(relPath), ".")
-		formatted.WriteString(fmt.Sprintf("### File: `%s`%s\n\n```%s\n%s\n```\n\n", relPath, lineRangeDesc, ext, strings.TrimRight(content, "\n")))
-	case "xml":
-		formatted.WriteString(fmt.Sprintf("\x3cfile path=\"%s\" lines=\"%d-%d\"\x3e\n%s\n\x3c/file\x3e\n\n", relPath, startLine, endLine, strings.TrimRight(content, "\n")))
-	default: // "raw"
+		lineRangeDesc := ""
+		if startLine > 0 && endLine > 0 {
+			lineRangeDesc = fmt.Sprintf(" (lines %d-%d)", startLine, endLine)
+		}
+		return fmt.Sprintf("### File: `%s`%s\n\n```%s\n%s\n```\n\n", relPath, lineRangeDesc, ext, strings.TrimRight(content, "\n"))
+	case "raw":
 		separator := strings.Repeat("-", 50)
-		formatted.WriteString(fmt.Sprintf("%s\nFILE: %s%s\n%s\n\n%s\n\n", separator, relPath, lineRangeDesc, separator, strings.TrimRight(content, "\n")))
+		lineRangeDesc := ""
+		if startLine > 0 && endLine > 0 {
+			lineRangeDesc = fmt.Sprintf(" (lines %d-%d)", startLine, endLine)
+		}
+		return fmt.Sprintf("%s\nFILE: %s%s\n%s\n\n%s\n\n", separator, relPath, lineRangeDesc, separator, strings.TrimRight(content, "\n"))
+	default: // "tags", "xml", or default
+		return fmt.Sprintf("\x3cfile path=\"%s\"%s\x3e\n%s\n\x3c/file\x3e\n\n", relPath, lineAttr, strings.TrimRight(content, "\n"))
 	}
-	return formatted.String()
 }
 
 func isMinified(content []byte) bool {
