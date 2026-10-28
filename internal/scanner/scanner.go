@@ -37,13 +37,13 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 	bufWriter := bufio.NewWriter(writer)
 	defer bufWriter.Flush()
 
-	// 1. Initial rule (Root ".")
+	// Initial rule (Root ".")
 	rootRule, ok := cfg.Dirs["."]
 	if !ok {
 		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
-	// 2. Resolve diff filtering if requested
+	// Resolve diff filtering if requested
 	var changedFiles map[string]bool
 	if opts.DiffOnly {
 		var err error
@@ -53,16 +53,13 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 		}
 	}
 
-	// 3. Collect matching files first
+	// Collect matching files
 	var matchedFiles []string
-	var walkErr error
-
-	walkErr = collectFiles(rootPath, rootPath, cfg, rootRule, chain, changedFiles, &matchedFiles)
-	if walkErr != nil {
-		return nil, walkErr
+	if err := collectFiles(rootPath, rootPath, cfg, rootRule, chain, changedFiles, &matchedFiles); err != nil {
+		return nil, err
 	}
 
-	// 4. Prepend Tree if enabled
+	// Prepend Tree if enabled
 	showTree := true
 	if cfg.Tree != nil {
 		showTree = *cfg.Tree
@@ -77,7 +74,6 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 		fmt.Fprintln(bufWriter, strings.Repeat("=", 60)+"\n")
 	}
 
-	// Format selection: opts override config, defaults to raw
 	format := "raw"
 	if cfg.Format != "" {
 		format = cfg.Format
@@ -96,11 +92,10 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 
 	result := &ScanResult{}
 
-	// 5. Render file contents
+	// Render file contents
 	for _, relPath := range matchedFiles {
 		absPath := filepath.Join(rootPath, filepath.FromSlash(relPath))
 
-		// Check for specific directory rule to observe 'compact'
 		dirPath := filepath.Dir(relPath)
 		rule := rootRule
 		if r, exists := cfg.Dirs[dirPath]; exists {
@@ -127,9 +122,7 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 		}
 	}
 
-	// Token estimation: ~4 chars per token
 	result.ApproxTokens = int(result.TotalBytes / 4)
-
 	return result, nil
 }
 
@@ -142,7 +135,6 @@ func collectFiles(
 	changedFiles map[string]bool,
 	matchedFiles *[]string,
 ) error {
-
 	relDir, _ := filepath.Rel(rootPath, fullPath)
 	if relDir == "." {
 		relDir = "."
@@ -169,12 +161,10 @@ func collectFiles(
 		relEntryPath = filepath.ToSlash(relEntryPath)
 		ext := strings.TrimPrefix(filepath.Ext(entry.Name()), ".")
 
-		// System exclusions (including dynamic OutputFile name)
 		if shouldAlwaysExclude(entry.Name(), cfg.OutputFile) {
 			continue
 		}
 
-		// Exclude pattern rule
 		if checkPatternMatch(entry.Name(), relEntryPath, currentRule.Exclude) {
 			continue
 		}
@@ -185,24 +175,18 @@ func collectFiles(
 			isIgnored := ignoreChain.Match(entryPath, true)
 			explicitRule, hasExplicitRule := cfg.Dirs[relEntryPath]
 
-			// If explicitly disabled in config, always skip
 			if hasExplicitRule && !explicitRule.Enabled {
 				continue
 			}
 
-			// If explicitly enabled in config, it takes precedence over .gitignore
 			isExplicitlyEnabled := hasExplicitRule && explicitRule.Enabled
 
-			// If gitignored and not forced and not explicitly enabled, skip
 			if isIgnored && !isForced && !isExplicitlyEnabled {
 				continue
 			}
 
 			var subChain config.GitIgnoreChain
 			if isIgnored && isExplicitlyEnabled {
-				// Parent gitignore ignored this directory, but user explicitly enabled it in config.
-				// Reset ignore chain to this directory so the parent directory's ignore rule
-				// does not suppress files inside this folder.
 				subChain = config.NewGitIgnoreChain(entryPath)
 			} else {
 				subChain = ignoreChain.AddIfExists(entryPath)
@@ -214,26 +198,22 @@ func collectFiles(
 			continue
 		}
 
-		// Gitignore check
 		if !isForced && ignoreChain.Match(entryPath, false) {
 			continue
 		}
 
-		// Git diff filter check
 		if changedFiles != nil && !isForced {
 			if !changedFiles[relEntryPath] {
 				continue
 			}
 		}
 
-		// Extension excludes
 		if !isForced && len(currentRule.ExcludeExtensions) > 0 {
 			if contains(currentRule.ExcludeExtensions, ext) {
 				continue
 			}
 		}
 
-		// Extension includes
 		if !isForced && len(currentRule.Extensions) > 0 {
 			if !contains(currentRule.Extensions, ext) {
 				continue
@@ -246,24 +226,19 @@ func collectFiles(
 	return nil
 }
 
-// shouldAlwaysExclude handles hardcoded exclusions and dynamic output file.
 func shouldAlwaysExclude(name, outputFile string) bool {
 	outName := filepath.Base(outputFile)
 	return name == ".git" || name == "textify.yaml" || name == outName
 }
 
-// checkPatternMatch checks if the file matches any of the glob patterns.
 func checkPatternMatch(name, relPath string, patterns []string) bool {
 	for _, p := range patterns {
-		// Match against filename
 		if matched, _ := filepath.Match(p, name); matched {
 			return true
 		}
-		// Match against relative path
 		if matched, _ := filepath.Match(p, relPath); matched {
 			return true
 		}
-		// Direct folder/file path match
 		if p == relPath {
 			return true
 		}
@@ -280,7 +255,6 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// appendFileContent writes the formatted file entry to the buffer.
 func appendFileContent(
 	absPath, relPath string,
 	rule config.DirRule,
@@ -290,13 +264,11 @@ func appendFileContent(
 	maxSize int64,
 	redactSecrets bool,
 ) (int64, int, error) {
-	// Skip binary files
 	isBin, err := fileutil.IsBinary(absPath)
 	if err != nil || isBin {
 		return 0, 0, nil
 	}
 
-	// Enforce file size limits
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return 0, 0, err
@@ -310,18 +282,15 @@ func appendFileContent(
 		return 0, 0, err
 	}
 
-	// Detect and skip minified files (e.g. bundle.js, single line with > 2000 chars)
 	if isMinified(rawBytes) {
 		return 0, 0, nil
 	}
 
 	content := string(rawBytes)
 
-	// Process Signatures mode
 	if signaturesOnly {
 		content = ExtractSignatures(relPath, content)
 	} else if rule.Compact {
-		// Strip blank lines and trailing spaces
 		var sb strings.Builder
 		sc := bufio.NewScanner(strings.NewReader(content))
 		for sc.Scan() {
@@ -339,21 +308,40 @@ func appendFileContent(
 		content, redactedCount = fileutil.RedactSecrets(content)
 	}
 
-	// Render formatted content
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+	if !signaturesOnly {
+		var numbered strings.Builder
+		for idx, line := range lines {
+			numbered.WriteString(fmt.Sprintf("%5d | %s\n", idx+1, line))
+		}
+		content = numbered.String()
+	}
+
+	formatted := renderFormattedEntry(relPath, content, format, 1, totalLines)
+
+	n, writeErr := writer.WriteString(formatted)
+	return int64(n), redactedCount, writeErr
+}
+
+func renderFormattedEntry(relPath, content, format string, startLine, endLine int) string {
+	lineRangeDesc := ""
+	if startLine > 0 && endLine > 0 {
+		lineRangeDesc = fmt.Sprintf(" (Lines %d-%d)", startLine, endLine)
+	}
+
 	var formatted strings.Builder
 	switch strings.ToLower(format) {
 	case "markdown", "md":
 		ext := strings.TrimPrefix(filepath.Ext(relPath), ".")
-		formatted.WriteString(fmt.Sprintf("### File: `%s`\n\n```%s\n%s\n```\n\n", relPath, ext, strings.TrimRight(content, "\n")))
+		formatted.WriteString(fmt.Sprintf("### File: `%s`%s\n\n```%s\n%s\n```\n\n", relPath, lineRangeDesc, ext, strings.TrimRight(content, "\n")))
 	case "xml":
-		formatted.WriteString(fmt.Sprintf("<file path=\"%s\">\n%s\n</file>\n\n", relPath, strings.TrimRight(content, "\n")))
+		formatted.WriteString(fmt.Sprintf("\x3cfile path=\"%s\" lines=\"%d-%d\"\x3e\n%s\n\x3c/file\x3e\n\n", relPath, startLine, endLine, strings.TrimRight(content, "\n")))
 	default: // "raw"
 		separator := strings.Repeat("-", 50)
-		formatted.WriteString(fmt.Sprintf("%s\nFILE: %s\n%s\n\n%s\n\n", separator, relPath, separator, strings.TrimRight(content, "\n")))
+		formatted.WriteString(fmt.Sprintf("%s\nFILE: %s%s\n%s\n\n%s\n\n", separator, relPath, lineRangeDesc, separator, strings.TrimRight(content, "\n")))
 	}
-
-	n, writeErr := writer.WriteString(formatted.String())
-	return int64(n), redactedCount, writeErr
+	return formatted.String()
 }
 
 func isMinified(content []byte) bool {

@@ -2,53 +2,17 @@ package scanner
 
 import (
 	"bufio"
-	"bytes"
-	"go/ast"
-	"go/parser"
-	"go/printer"
-	"go/token"
+	"fmt"
 	"path/filepath"
 	"strings"
 )
 
-// ExtractSignatures takes file contents and strips function/method bodies.
+// ExtractSignatures takes file contents and strips function/method bodies,
+// preserving structs, interfaces, types, and function signatures with their
+// original 1-based source line numbers.
 func ExtractSignatures(filePath string, content string) string {
 	ext := strings.ToLower(filepath.Ext(filePath))
-
-	if ext == ".go" {
-		if res, err := extractGoSignatures(filePath, content); err == nil {
-			return res
-		}
-	}
-
 	return extractGenericSignatures(content, ext)
-}
-
-func extractGoSignatures(filename string, content string) (string, error) {
-	fset := token.NewFileSet()
-	node, err := parser.ParseFile(fset, filename, content, parser.ParseComments)
-	if err != nil {
-		return "", err
-	}
-
-	// Remove function bodies
-	ast.Inspect(node, func(n ast.Node) bool {
-		switch fn := n.(type) {
-		case *ast.FuncDecl:
-			if fn.Body != nil {
-				fn.Body.List = nil // Remove statements inside function
-			}
-		}
-		return true
-	})
-
-	var buf bytes.Buffer
-	cfg := printer.Config{Mode: printer.UseSpaces | printer.TabIndent, Tabwidth: 8}
-	if err := cfg.Fprint(&buf, fset, node); err != nil {
-		return "", err
-	}
-
-	return buf.String(), nil
 }
 
 func extractGenericSignatures(content string, ext string) string {
@@ -58,19 +22,26 @@ func extractGenericSignatures(content string, ext string) string {
 	inBlock := false
 	braceDepth := 0
 	isPython := ext == ".py"
+	lineNum := 0
 
 	for scanner.Scan() {
+		lineNum++
 		line := scanner.Text()
 		trimmed := strings.TrimSpace(line)
 
+		// Always keep package declarations and imports for context
+		if strings.HasPrefix(trimmed, "package ") || strings.HasPrefix(trimmed, "import ") {
+			out.WriteString(fmt.Sprintf("%5d | %s\n", lineNum, line))
+			continue
+		}
+
 		if isPython {
 			if strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "class ") ||
-				strings.HasPrefix(trimmed, "@") || strings.HasPrefix(trimmed, "import ") ||
-				strings.HasPrefix(trimmed, "from ") {
-				out.WriteString(line + "\n")
+				strings.HasPrefix(trimmed, "@") || strings.HasPrefix(trimmed, "from ") {
+				out.WriteString(fmt.Sprintf("%5d | %s\n", lineNum, line))
 				if strings.HasSuffix(trimmed, ":") {
 					indent := getLeadingWhitespace(line)
-					out.WriteString(indent + "    ...\n")
+					out.WriteString(fmt.Sprintf("%5d | %s    ...\n", lineNum, indent))
 				}
 			}
 			continue
@@ -98,12 +69,20 @@ func extractGenericSignatures(content string, ext string) string {
 		if inBlock {
 			if braceDepth == 0 && strings.Contains(trimmed, "{") {
 				braceIdx := strings.Index(line, "{")
-				out.WriteString(line[:braceIdx+1] + " /* ... */ }\n")
-				inBlock = false
-				continue
+				// If opening a function body on the same line, truncate implementation
+				if strings.HasPrefix(trimmed, "func ") ||
+					strings.HasPrefix(trimmed, "fn ") ||
+					strings.HasPrefix(trimmed, "function ") ||
+					strings.HasPrefix(trimmed, "pub fn ") ||
+					strings.HasPrefix(trimmed, "export function ") ||
+					strings.HasPrefix(trimmed, "export default function ") {
+					out.WriteString(fmt.Sprintf("%5d | %s /* ... */ }\n", lineNum, line[:braceIdx+1]))
+					inBlock = false
+					continue
+				}
 			}
 
-			out.WriteString(line + "\n")
+			out.WriteString(fmt.Sprintf("%5d | %s\n", lineNum, line))
 
 			for _, c := range trimmed {
 				if c == '{' {

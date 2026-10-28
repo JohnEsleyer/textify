@@ -35,6 +35,10 @@ func main() {
 		runStart(args, true, false)
 	case "diff":
 		runStart(args, false, true)
+	case "load":
+		runLoad(args)
+	case "prompt":
+		printPrompt()
 	case "version", "-v", "--version":
 		fmt.Printf("textify %s\n", version)
 	case "help", "-h", "--help":
@@ -194,6 +198,124 @@ func runStart(args []string, signaturesOnly, diffOnly bool) {
 	fmt.Printf("--------------------------------------------------\n")
 }
 
+func runLoad(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Error: Missing request file.")
+		fmt.Println("Usage: textify load <request.txt> [flags]")
+		os.Exit(1)
+	}
+
+	requestFile := args[0]
+	fs := flag.NewFlagSet("load", flag.ExitOnError)
+	formatFlag := fs.String("format", "", "Output format: raw, markdown, or xml")
+	clipFlag := fs.Bool("clip", false, "Copy output directly to clipboard")
+	clipShortFlag := fs.Bool("c", false, "Copy output directly to clipboard (shorthand)")
+	stdoutFlag := fs.Bool("stdout", false, "Stream output directly to standard output")
+	noRedactFlag := fs.Bool("no-redact", false, "Disable sensitive secret scrubbing")
+	outputFlag := fs.String("o", "", "Override output file name")
+
+	if err := fs.Parse(args[1:]); err != nil {
+		os.Exit(1)
+	}
+
+	copyToClip := *clipFlag || *clipShortFlag
+
+	reqData, err := os.ReadFile(requestFile)
+	if err != nil {
+		fmt.Printf("Error reading request file %s: %v\n", requestFile, err)
+		os.Exit(1)
+	}
+
+	requests := scanner.ParseRequest(string(reqData))
+	if len(requests) == 0 {
+		fmt.Println("No valid file requests found in", requestFile)
+		fmt.Println("Ensure the file contains <request><file path=\"...\" /></request> or a bullet list.")
+		os.Exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		cfg = &config.Config{OutputFile: "codebase.txt"}
+	}
+
+	if *outputFlag != "" {
+		cfg.OutputFile = *outputFlag
+	}
+
+	opts := scanner.ScanOptions{
+		Format:        *formatFlag,
+		RedactSecrets: !*noRedactFlag,
+		Stdout:        *stdoutFlag,
+	}
+
+	var outputBuf bytes.Buffer
+	if !*stdoutFlag {
+		fmt.Printf("Loading %d file request(s) from %s...\n", len(requests), requestFile)
+	}
+
+	result, err := scanner.LoadRequests(cwd, cfg, requests, &outputBuf, opts)
+	if err != nil {
+		fmt.Printf("Error processing requests: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *stdoutFlag {
+		os.Stdout.Write(outputBuf.Bytes())
+		return
+	}
+
+	outPath := cfg.OutputFile
+	if !filepath.IsAbs(outPath) {
+		outPath = filepath.Join(cwd, outPath)
+	}
+
+	if err := os.WriteFile(outPath, outputBuf.Bytes(), 0644); err != nil {
+		fmt.Printf("Error writing output: %v\n", err)
+		os.Exit(1)
+	}
+
+	if copyToClip {
+		if clipErr := fileutil.CopyToClipboard(outputBuf.String()); clipErr == nil {
+			fmt.Println("✔ Output copied to system clipboard!")
+		} else {
+			fmt.Printf("Notice: Could not copy to clipboard (%v)\n", clipErr)
+		}
+	}
+
+	fmt.Printf("\n✔ Done! Detailed sections saved to: %s\n", cfg.OutputFile)
+	fmt.Printf("--------------------------------------------------\n")
+	fmt.Printf("Sections loaded: %d\n", result.FilesCount)
+	fmt.Printf("Total size:      %.2f KB\n", float64(result.TotalBytes)/1024.0)
+	fmt.Printf("Approx. tokens:  ~%d tokens\n", result.ApproxTokens)
+	if result.RedactedSecrets > 0 {
+		fmt.Printf("⚠️ Redacted secrets: %d sensitive token(s) sanitized\n", result.RedactedSecrets)
+	}
+	fmt.Printf("--------------------------------------------------\n")
+}
+
+func printPrompt() {
+	fmt.Println(`Copy and paste this prompt to the LLM alongside your signatures:
+--------------------------------------------------------------------------------
+Here is the project outline and signatures with line numbers.
+Analyze them. If you need the full implementation of specific files,
+line ranges, or functions to answer my question, respond using this format:
+
+<request>
+  <file path="path/to/file.ext" />
+  <file path="path/to/file.ext" lines="50-120" />
+  <file path="path/to/file.ext" symbols="FunctionName,TypeName" />
+</request>
+
+Otherwise, proceed directly with your solution.
+--------------------------------------------------------------------------------`)
+}
+
 func printHelp() {
 	fmt.Println("Textify - Turn your codebase into AI-ready text")
 	fmt.Println("\nUsage:")
@@ -202,8 +324,10 @@ func printHelp() {
 	fmt.Println("  textify start [flags]       Generates output file based on configuration")
 	fmt.Println("  textify signatures [flags]  Extracts structs, types, interfaces, and function signatures")
 	fmt.Println("  textify diff [flags]        Only includes modified and untracked git files")
+	fmt.Println("  textify load <file> [flags] Extracts specific files/lines requested by the LLM")
+	fmt.Println("  textify prompt              Prints the instruction prompt to paste to the LLM")
 	fmt.Println("  textify version             Shows current version")
-	fmt.Println("\nFlags for start, signatures, and diff:")
+	fmt.Println("\nFlags for start, signatures, diff, and load:")
 	fmt.Println("  --clip, -c                  Copy output directly to clipboard")
 	fmt.Println("  --format <raw|markdown|xml> Output format structure (default raw)")
 	fmt.Println("  --stdout                    Stream output to stdout (useful for piping)")

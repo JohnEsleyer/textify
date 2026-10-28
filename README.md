@@ -109,7 +109,7 @@ Once satisfied with your config, run either:
   ```bash
   textify signatures
   ```
-  This strips out function implementations and keeps only structs, types, enums, and function signatures to drastically reduce token usage for LLM context windows.
+  Exports types, interfaces, enums, and function signatures with exact source line numbers, stripping out function bodies.
 
 * **Git Diff Mode (PR & Change Reviews):**
   ```bash
@@ -117,8 +117,52 @@ Once satisfied with your config, run either:
   ```
   Exports only the files that have been modified or staged in your Git repository.
 
-### Advanced Flags
-You can append flags to `start`, `signatures`, and `diff`:
+---
+
+## 🎯 2-Stage Interactive Deep Dive (`textify load`)
+
+To save thousands of tokens on large codebases, use the interactive 2-stage workflow:
+
+### Step 1: Export Signatures & Prompt the LLM
+Run:
+```bash
+textify signatures -c
+```
+Paste this into your LLM chat. Then run:
+```bash
+textify prompt
+```
+Copy and append the instruction prompt to the LLM:
+> *"If you need full implementations, respond using `<request><file path="..." lines="X-Y" /></request>`."*
+
+### Step 2: Load the LLM's Request
+Copy the LLM's response into `request.txt` (or any text file). Then run:
+```bash
+textify load request.txt -c
+```
+Textify ignores the LLM's conversational text, slices out only the exact files, line ranges, or functions requested (with numbered lines), and copies the result straight to your clipboard ready to paste back.
+
+#### Supported LLM Request Syntaxes
+**XML-style tags (Recommended):**
+```xml
+<request>
+  <file path="cmd/textify/main.go" />
+  <file path="internal/scanner/scanner.go" lines="50-120" />
+  <file path="internal/config/config.go" symbols="Config,DirRule" />
+</request>
+```
+
+**Markdown lists:**
+```markdown
+- cmd/textify/main.go
+- internal/scanner/scanner.go:50-120
+```
+
+---
+
+## 🚩 Advanced Flags
+
+You can append flags to `start`, `signatures`, `diff`, and `load`:
 * `--clip` or `-c`: Copies output directly to your system clipboard.
 * `--format <raw|markdown|xml>`: Structured outputs tailored for Claude (XML) or ChatGPT (Markdown).
 * `--stdout`: Streams the output to stdout for Unix piping (e.g. `textify start --stdout | pbcopy`).

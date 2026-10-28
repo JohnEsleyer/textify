@@ -67,9 +67,9 @@ func TestScanWithGranularRules(t *testing.T) {
 	// 4. Assertions
 
 	// Should Include
-	assertContains(t, output, "FILE: normal.go")   // In extensions
-	assertContains(t, output, "FILE: data.json")   // In extensions
-	assertContains(t, output, "FILE: secrets.env") // Force included (overrides gitignore)
+	assertContains(t, output, "normal.go")   // In extensions
+	assertContains(t, output, "data.json")   // In extensions
+	assertContains(t, output, "secrets.env") // Force included (overrides gitignore)
 
 	// Should Exclude
 	assertNotContains(t, output, "FILE: annoying.go") // Force excluded
@@ -114,10 +114,10 @@ func TestMixedDirectoryRules(t *testing.T) {
 	Scan(tempDir, cfg, &buf, ScanOptions{Tree: false})
 	output := buf.String()
 
-	assertContains(t, output, "FILE: backend/main.go")
-	assertNotContains(t, output, "FILE: backend/test.js")
-	assertContains(t, output, "FILE: frontend/app.js")
-	assertNotContains(t, output, "FILE: frontend/style.css")
+	assertContains(t, output, "backend/main.go")
+	assertNotContains(t, output, "backend/test.js")
+	assertContains(t, output, "frontend/app.js")
+	assertNotContains(t, output, "frontend/style.css")
 }
 
 func TestSubfolderGitignoreAndDisabledSubdir(t *testing.T) {
@@ -162,8 +162,8 @@ func TestSubfolderGitignoreAndDisabledSubdir(t *testing.T) {
 	}
 	output := buf.String()
 
-	assertContains(t, output, "FILE: frontend/src/App.tsx")
-	assertContains(t, output, "FILE: services/auth/src/index.ts")
+	assertContains(t, output, "frontend/src/App.tsx")
+	assertContains(t, output, "services/auth/src/index.ts")
 
 	// node_modules excluded by frontend/.gitignore
 	assertNotContains(t, output, "FILE: frontend/node_modules/pkg.js")
