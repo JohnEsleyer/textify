@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
 	"github.com/JohnEsleyer/textify/internal/config"
 )
 
@@ -56,7 +57,7 @@ func TestScanWithGranularRules(t *testing.T) {
 
 	// 3. Run Scan
 	var buf bytes.Buffer
-	err = Scan(tempDir, cfg, &buf)
+	err = Scan(tempDir, cfg, &buf, false)
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestMixedDirectoryRules(t *testing.T) {
 				Extensions: []string{"go"}, // Only Go
 			},
 			"frontend": {
-				Enabled: true,
+				Enabled:    true,
 				Extensions: []string{"js", "css"},
 				Exclude:    []string{"style.css"}, // Exclude specific file despite matching extension
 			},
@@ -110,7 +111,7 @@ func TestMixedDirectoryRules(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	Scan(tempDir, cfg, &buf)
+	Scan(tempDir, cfg, &buf, false)
 	output := buf.String()
 
 	assertContains(t, output, "FILE: backend/main.go")
@@ -156,7 +157,7 @@ func TestSubfolderGitignoreAndDisabledSubdir(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Scan(tempDir, cfg, &buf); err != nil {
+	if err := Scan(tempDir, cfg, &buf, false); err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 	output := buf.String()
@@ -170,6 +171,47 @@ func TestSubfolderGitignoreAndDisabledSubdir(t *testing.T) {
 	assertNotContains(t, output, "FILE: frontend/dist/bundle.js")
 	// services/auth/dist excluded by Dirs rule
 	assertNotContains(t, output, "FILE: services/auth/dist/index.js")
+}
+
+func TestScanSignaturesOnly(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_test_signatures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	goCode := `package main
+
+type User struct {
+	ID   int
+	Name string
+}
+
+func Add(a, b int) int {
+	return a + b
+}
+`
+	createFile(t, tempDir, "main.go", goCode)
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled:    true,
+				Extensions: []string{"go"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Scan(tempDir, cfg, &buf, true); err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	output := buf.String()
+
+	assertContains(t, output, "FILE: main.go")
+	assertContains(t, output, "type User struct {")
+	assertContains(t, output, "func Add(a, b int) int {")
 }
 
 func createFile(t *testing.T, dir, name, content string) {

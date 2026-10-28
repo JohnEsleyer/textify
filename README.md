@@ -97,11 +97,19 @@ dirs:
 ```
 
 ### 4. Generate
-Once satisfied with your config, run:
-```bash
-textify start
-```
-This reads your configuration and generates `codebase.txt` (or whatever you named your output file).
+Once satisfied with your config, run either:
+
+* **Full Codebase Export:**
+  ```bash
+  textify start
+  ```
+  This reads your configuration and generates `codebase.txt` with full file contents.
+
+* **Signatures & Types Mode (Token-Saver):**
+  ```bash
+  textify signatures
+  ```
+  This strips out function implementations and keeps only structs, types, enums, and function signatures to drastically reduce token usage for LLM context windows.
 
 ---
 

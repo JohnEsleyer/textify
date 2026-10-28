@@ -13,7 +13,7 @@ import (
 )
 
 // Scan initiates the directory walk based on the provided configuration.
-func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
+func Scan(rootPath string, cfg *config.Config, writer io.Writer, signaturesOnly bool) error {
 	chain := config.NewGitIgnoreChain(rootPath)
 	bufWriter := bufio.NewWriter(writer)
 	defer bufWriter.Flush()
@@ -25,7 +25,7 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer) error {
 		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
-	return walk(rootPath, rootPath, cfg.Dirs, rootRule, chain, bufWriter)
+	return walk(rootPath, rootPath, cfg.Dirs, rootRule, chain, bufWriter, signaturesOnly)
 }
 
 func walk(
@@ -35,6 +35,7 @@ func walk(
 	currentRule config.DirRule,
 	ignoreChain config.GitIgnoreChain,
 	writer *bufio.Writer,
+	signaturesOnly bool,
 ) error {
 
 	// Check if the directory we are currently IN has a specific rule
@@ -101,7 +102,7 @@ func walk(
 			}
 
 			subChain := ignoreChain.AddIfExists(entryPath)
-			if err := walk(entryPath, rootPath, dirRules, currentRule, subChain, writer); err != nil {
+			if err := walk(entryPath, rootPath, dirRules, currentRule, subChain, writer, signaturesOnly); err != nil {
 				return err
 			}
 			continue
@@ -133,7 +134,7 @@ func walk(
 		}
 
 		// Write content
-		if err := appendFileContent(entryPath, relEntryPath, currentRule, writer); err != nil {
+		if err := appendFileContent(entryPath, relEntryPath, currentRule, writer, signaturesOnly); err != nil {
 			continue
 		}
 	}
@@ -174,7 +175,7 @@ func contains(slice []string, item string) bool {
 }
 
 // appendFileContent writes the file header and content to the buffer.
-func appendFileContent(absPath, relPath string, rule config.DirRule, writer *bufio.Writer) error {
+func appendFileContent(absPath, relPath string, rule config.DirRule, writer *bufio.Writer, signaturesOnly bool) error {
 	// Check for binary content
 	isBin, err := fileutil.IsBinary(absPath)
 	if err != nil || isBin {
@@ -192,14 +193,52 @@ func appendFileContent(absPath, relPath string, rule config.DirRule, writer *buf
 	fmt.Fprintf(writer, "FILE: %s\n", relPath)
 	fmt.Fprintf(writer, "%s\n\n", separator)
 
-	if rule.Compact {
+	if signaturesOnly || rule.Compact {
 		scanner := bufio.NewScanner(file)
+		inBody := false
+		braceCount := 0
+
 		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			// Keep non-empty lines that look like structural signatures/declarations,
-			// or strip full block bodies to save tokens.
-			if line != "" {
-				fmt.Fprintln(writer, line)
+			line := scanner.Text()
+			trimmed := strings.TrimSpace(line)
+
+			if signaturesOnly {
+				// Heuristic filter for structs, enums, interfaces, classes, and function signatures
+				isSigStart := strings.HasPrefix(trimmed, "func ") ||
+					strings.HasPrefix(trimmed, "fn ") ||
+					strings.HasPrefix(trimmed, "type ") ||
+					strings.HasPrefix(trimmed, "struct ") ||
+					strings.HasPrefix(trimmed, "enum ") ||
+					strings.HasPrefix(trimmed, "class ") ||
+					strings.HasPrefix(trimmed, "interface ") ||
+					strings.HasPrefix(trimmed, "trait ") ||
+					strings.Contains(trimmed, "func(") ||
+					strings.Contains(trimmed, "interface{") ||
+					strings.Contains(trimmed, "struct{")
+
+				if isSigStart {
+					inBody = true
+					braceCount = 0
+				}
+
+				if inBody {
+					fmt.Fprintln(writer, line)
+					for _, ch := range trimmed {
+						if ch == '{' {
+							braceCount++
+						} else if ch == '}' {
+							braceCount--
+						}
+					}
+					if braceCount <= 0 && strings.Contains(trimmed, "}") {
+						inBody = false
+						fmt.Fprintln(writer, "")
+					}
+				}
+			} else {
+				if trimmed != "" {
+					fmt.Fprintln(writer, line)
+				}
 			}
 		}
 	} else {
@@ -210,11 +249,13 @@ func appendFileContent(absPath, relPath string, rule config.DirRule, writer *buf
 
 	fmt.Fprintf(writer, "\n\n")
 
-	fmt.Printf("Added: %s%s\n", relPath, func() string {
-		if rule.Compact {
-			return " (compacted)"
-		}
-		return ""
-	}())
+	modeSuffix := ""
+	if signaturesOnly {
+		modeSuffix = " (signatures only)"
+	} else if rule.Compact {
+		modeSuffix = " (compacted)"
+	}
+
+	fmt.Printf("Added: %s%s\n", relPath, modeSuffix)
 	return nil
 }
