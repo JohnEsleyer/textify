@@ -1,27 +1,29 @@
-# Textify
 
-**Textify** is a developer tool designed to prepare your codebase for Large Language Models (LLMs) like Claude, ChatGPT, and Gemini.
+# Textify ⚡
 
-It flattens your project structure into a single, well-formatted text file. Instead of manually copy-pasting dozens of files, Textify scans your project, respects your `.gitignore`, filters out binaries, and applies custom inclusion rules defined in a simple configuration file.
+[![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+**Textify** is a high-performance CLI tool that converts your codebase into structured, AI-ready context for Large Language Models (LLMs) such as Claude, ChatGPT, DeepSeek, and Gemini.
+
+Instead of pasting random files into chat windows, Textify structures your project with directory trees, 1-based source line numbers, automated secret redaction, and intelligent filtering.
 
 ---
 
-## 🚀 Key Features
+## 💡 Why Textify?
 
-*   **Smart Discovery:** Automatically detects directory structures and file extensions to pre-populate your configuration.
-*   **Workflow Driven:** Simple `init`, `scan`, and `start` commands to manage your context.
-*   **Directory-Scoped Configuration:** Define different rules for different folders (e.g., only include `.ts` files in `/frontend` but `.go` files in `/backend`).
-*   **Granular Control:** Use the `enabled` flag to quickly include or exclude entire directory branches.
-*   **Smart Filtering:** Automatically respects `.gitignore` and detects binary files (images, PDFs, executables) to keep output clean.
-*   **Force Includes:** Easily include files normally ignored (like `.env.example` or GitHub workflow configs) using the allowlist.
+- 📉 **Save 80–90% of Tokens:** Use the **2-stage interactive workflow**—export function/type signatures first, prompt the LLM, then slice out only the exact files or line ranges it asks to see.
+- 🎯 **Ground AI with Line Numbers:** Every line is indexed (`  120 | func Run()`), enabling LLMs to provide exact line references, diffs, and surgical refactorings.
+- 🛡️ **Built-in Security:** Automatic secret redaction for API keys, AWS credentials, GitHub tokens, and private keys before code leaves your machine.
+- 🌲 **Context-Aware Visual Tree:** Automatically prepends an ASCII directory tree of the included files.
+- 🧠 **Nested `.gitignore` & Binary Detection:** Respects multi-tier `.gitignore` files, automatically detects binary files, and ignores minified assets (>2,000 chars/line).
+- 📋 **Zero-Friction Clipboard Integration:** Native clipboard copy (`--clip` / `-c`) supporting macOS (`pbcopy`), Linux (`wl-copy`, `xclip`, `xsel`), Windows (`clip`), and terminal OSC 52 fallback.
 
 ---
 
 ## 📦 Installation
 
 ### Option 1: Go Install (Recommended)
-If you have Go installed, this is the fastest way to get started:
-
 ```bash
 go install github.com/JohnEsleyer/textify/cmd/textify@latest
 ```
@@ -31,207 +33,215 @@ go install github.com/JohnEsleyer/textify/cmd/textify@latest
 git clone https://github.com/JohnEsleyer/textify.git
 cd textify
 go build -o textify ./cmd/textify
-```
-*(Optional) Move the binary to your path:*
-```bash
-sudo mv textify /usr/local/bin/
+sudo mv textify /usr/local/bin/   # Optional: move to PATH
 ```
 
 ---
 
-## 📖 How to Use
+## ⚡ Quick Start
 
-Textify outputs code using XML-style tags with line-number metadata:
+```bash
+# 1. Initialize configuration by scanning your repository
+textify init
+
+# 2. Bundle your codebase and copy directly to your clipboard
+textify start -c
+```
+
+The output file (default: `codebase.txt`) is generated with line-numbered XML-style tags, an ASCII tree, and token usage statistics:
 
 ```xml
-<file path="cmd/textify/main.go" lines="1-120">
+PROJECT STRUCTURE:
+├── cmd/
+│   └── textify/
+│       └── main.go
+└── internal/
+    └── scanner/
+        └── scanner.go
+
+============================================================
+
+<file path="cmd/textify/main.go" lines="1-50">
     1 | package main
-    2 |
+    2 | 
     3 | import (
     4 |     "fmt"
 ...
-  120 | }
+   50 | }
 </file>
 ```
 
-### 1. Initialize
-Navigate to your project root and run:
-```bash
-textify init
+---
+
+## 🎯 2-Stage Interactive Mode (Save Thousands of Tokens)
+
+For large codebases, dumping all source files wastes context windows and inflates costs. Use Textify's two-step interaction:
+
 ```
-This scans your current directory structure, detects extensions used in each folder, and generates a `textify.yaml` configuration file. It automatically marks ignored folders (like `node_modules` or `dist`) as `enabled: false`.
-
-### 2. Update (Optional)
-If you add new directories to your project, you don't need to rebuild your config manually. Just run:
-```bash
-textify scan
+┌─────────────────┐       1. textify signatures -c      ┌─────────────────┐
+│                 ├────────────────────────────────────►│                 │
+│                 │       2. textify prompt             │                 │
+│                 │                                     │       LLM       │
+│  Local Codebase │                                     │ (Claude/ChatGPT)│
+│                 │◄────────────────────────────────────┤                 │
+│                 │       3. LLM returns <request> tags │                 │
+└────────┬────────┘                                     └─────────────────┘
+         │
+         │ 4. textify load request.txt -c
+         ▼
+   Clipboard filled with ONLY
+   requested lines & functions
 ```
-This will detect new folders and append them to your `textify.yaml` while preserving your existing rules.
 
-### 3. Configure (Optional)
-Open `textify.yaml`. You can customize what gets included by toggling the `enabled` flag or modifying extensions.
+### Step 1: Export Signatures & Prompt the LLM
+Export structs, types, interfaces, and function signatures without implementations (docs like `.md` stay fully intact):
+```bash
+textify signatures -c
+```
+Paste this into your LLM. Then run:
+```bash
+textify prompt
+```
+Copy the output instructions and append them to your query:
+> *"If you need full implementations, respond using `<request><file path="..." lines="X-Y" /></request>`."*
 
-**Example `textify.yaml`:**
+### Step 2: Load the LLM's Request
+Save the LLM's response into `request.txt` (Textify ignores surrounding conversational text).
+
+**Supported formats within the response:**
+* XML tags (Recommended):
+  ```xml
+  <request>
+    <file path="cmd/textify/main.go" />
+    <file path="internal/scanner/scanner.go" lines="50-120" />
+    <file path="internal/config/config.go" symbols="Config,DirRule" />
+  </request>
+  ```
+* Markdown lists:
+  ```markdown
+  - cmd/textify/main.go
+  - internal/scanner/scanner.go:50-120
+  ```
+
+Then load the exact slices and copy them directly to your clipboard:
+```bash
+textify load request.txt -c
+```
+
+---
+
+## 🛠️ Commands
+
+| Command | Description |
+| :--- | :--- |
+| `textify init` | Scans directory tree, checks `.gitignore` rules, and generates `textify.yaml`. |
+| `textify scan` | Detects new directories and safely appends them to `textify.yaml` without overwriting existing settings. |
+| `textify start` | Bundles project files based on rules in `textify.yaml`. |
+| `textify signatures` | Extracts types, structs, interfaces, and function headers while preserving line numbers. |
+| `textify diff` | Bundles **only** modified, staged, or untracked Git files (`git status --porcelain`). |
+| `textify load <file>` | Extracts specific files, line ranges, or symbols requested by the LLM. |
+| `textify prompt` | Prints copy-pasteable instructions for the LLM during Stage 1. |
+| `textify version` | Prints current version. |
+| `textify help` | Shows CLI usage and available options. |
+
+---
+
+## 🚩 Command Flags
+
+Available for `start`, `signatures`, `diff`, and `load`:
+
+| Flag | Shorthand | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `--clip` | `-c` | `false` | Copies generated output directly to your system clipboard. |
+| `--format` | | `raw` / `xml` | Output styling: `xml` (or `tags`), `markdown`, or `raw`. |
+| `--stdout` | | `false` | Writes directly to stdout (useful for piping: `textify start --stdout \| pbcopy`). |
+| `--no-tree` | | `false` | Disables prepending the ASCII directory structure map. |
+| `--no-redact` | | `false` | Disables automatic scrubbing of sensitive tokens/API keys. |
+| `-o <file>` | | *(config)* | Override output destination filename (`load` command only). |
+
+---
+
+## ⚙️ Configuration (`textify.yaml`)
+
+`textify init` creates a commented `textify.yaml` at your project root.
+
 ```yaml
+# Global Output Configuration
 output_file: codebase.txt
+format: raw              # Options: raw, markdown, xml
+tree: true               # Prepend ASCII directory map (default: true)
+max_file_size: 512000    # File size limit in bytes (default: 500 KB)
 
 dirs:
-  # Root Directory Rules
+  # Root directory settings
   .:
     enabled: true
-    extensions: 
+    extensions:
+      - go
       - md
-      - json
       - yaml
     include:
-      - .env.example
+      - .env.example     # Force-include ignored files or specific dotfiles
 
-  # Backend Directory Rules
+  # Backend directory
   cmd:
     enabled: true
     extensions:
       - go
 
-  # Frontend Directory Rules
+  # Frontend directory
   frontend:
     enabled: true
+    compact: true        # Strips extra blank lines & leading/trailing whitespace
     extensions:
       - ts
       - tsx
       - css
-    include:
-      - package.json
+    exclude:
+      - "**/*.test.ts"   # Skip test files
+    exclude_extensions:
+      - map
 
-  # Excluded Directory
+  # Excluded directories
   node_modules:
+    enabled: false
+
+  dist:
     enabled: false
 ```
 
-### 4. Generate
-Once satisfied with your config, run either:
+### Directory Rule Reference
 
-* **Full Codebase Export:**
-  ```bash
-  textify start
-  ```
-  This reads your configuration and generates `codebase.txt` with full file contents.
-
-* **Signatures & Types Mode (Token-Saver):**
-  ```bash
-  textify signatures
-  ```
-  Exports types, interfaces, enums, and function signatures with exact source line numbers, stripping out function bodies (documentation files like `.md` are fully included).
-
-* **Git Diff Mode (PR & Change Reviews):**
-  ```bash
-  textify diff
-  ```
-  Exports only the files that have been modified or staged in your Git repository.
+| Property | Type | Description |
+| :--- | :---: | :--- |
+| `enabled` | `bool` | Set to `false` to skip this folder and all its subdirectories. |
+| `compact` | `bool` | Strips empty lines and trims whitespace to optimize token usage. |
+| `extensions` | `list` | Allow-list of extensions (e.g., `[go, ts]`). If empty, all text files are allowed. |
+| `exclude_extensions` | `list` | Block-list of extensions (e.g., `[tmp, log, map]`). |
+| `include` | `list` | Glob patterns/files to **force-include** (bypasses `.gitignore` and extension filters). |
+| `exclude` | `list` | Glob patterns/files to **force-exclude** (highest priority). |
 
 ---
 
-## 🎯 2-Stage Interactive Deep Dive (`textify load`)
+## 🛡️ Built-in Exclusions & Security
 
-To save thousands of tokens on large codebases, use the interactive 2-stage workflow:
+Textify safeguards context windows and prevents accidental credential leaks:
 
-### Step 1: Export Signatures & Prompt the LLM
-Run:
-```bash
-textify signatures -c
-```
-Paste this into your LLM chat. Then run:
-```bash
-textify prompt
-```
-Copy and append the instruction prompt to the LLM:
-> *"If you need full implementations, respond using `<request><file path="..." lines="X-Y" /></request>`."*
-
-### Step 2: Load the LLM's Request
-Copy the LLM's response into `request.txt` (or any text file). Then run:
-```bash
-textify load request.txt -c
-```
-Textify ignores the LLM's conversational text, slices out only the exact files, line ranges, or functions requested (with numbered lines), and copies the result straight to your clipboard ready to paste back.
-
-#### Supported LLM Request Syntaxes
-**XML-style tags (Recommended):**
-```xml
-<request>
-  <file path="cmd/textify/main.go" />
-  <file path="internal/scanner/scanner.go" lines="50-120" />
-  <file path="internal/config/config.go" symbols="Config,DirRule" />
-</request>
-```
-
-**Markdown lists:**
-```markdown
-- cmd/textify/main.go
-- internal/scanner/scanner.go:50-120
-```
-
----
-
-## 🚩 Advanced Flags
-
-You can append flags to `start`, `signatures`, `diff`, and `load`:
-* `--clip` or `-c`: Copies output directly to your system clipboard.
-* `--format <raw|markdown|xml>`: Structured outputs tailored for Claude (XML) or ChatGPT (Markdown).
-* `--stdout`: Streams the output to stdout for Unix piping (e.g. `textify start --stdout | pbcopy`).
-* `--no-tree`: Disables prepending the ASCII directory structure map.
-* `--no-redact`: Bypasses the automated secret scrubber.
-
----
-
-## ⚙️ Configuration Guide
-
-The `textify.yaml` file gives you granular control over what gets sent to the LLM.
-
-### `output_file`
-The name of the generated text file.
-```yaml
-output_file: context_for_ai.txt
-```
-
-### `dirs`
-This section maps directory paths to rules.
-*   **Keys:** The directory path relative to the project root (e.g., `.`, `src`, `src/components`).
-*   **Inheritance:** If a subdirectory is not explicitly listed in `dirs`, it inherits the rules from its parent directory.
-
-#### `enabled`
-A boolean (`true`/`false`) that determines if the directory and all its children should be scanned.
-*   If `false`, Textify will skip this entire branch.
-
-#### `extensions`
-A list of file extensions to include.
-*   If provided (e.g., `[go, js]`), **only** files with these extensions will be included.
-*   If empty, **all** text files not ignored by `.gitignore` will be included.
-
-#### `include`
-A list of specific files or folders to **Force Include**, regardless of extension rules or `.gitignore`.
-*   Useful for including `.env` files, specific config files in build folders, or dotfiles.
-*   Supports standard glob patterns (e.g., `scripts/*.sh`).
-
----
-
-## 🛡️ Default Exclusions
-
-Textify includes hardcoded logic to prevent scanning itself or common noise:
-*   **Always Ignored:** `.git` folder, `textify.yaml`, and the defined `output_file`.
-*   **Binaries:** Automatically detects and skips non-text files (images, compiled binaries).
-*   **Gitignore:** Respects your project's `.gitignore` rules during `init` and `scan` to set default `enabled` states.
-
----
-
-## 🤝 Contributing
-
-1.  Fork the repository.
-2.  Create your feature branch (`git checkout -b feature/amazing-feature`).
-3.  Commit your changes (`git commit -m 'Add some amazing feature'`).
-4.  Push to the branch (`git push origin feature/amazing-feature`).
-5.  Open a Pull Request.
+1. **Always Excluded:**
+   - `.git/` folder
+   - `textify.yaml` configuration
+   - The configured `output_file`
+2. **Binary & Asset Detection:**
+   - Evaluates the first 512 bytes for null bytes and invalid UTF-8 sequences.
+   - Automatically drops images, PDFs, compiled executables, etc.
+3. **Minified Asset Guard:**
+   - Skips files with line lengths exceeding 2,000 characters (e.g., minified JS bundles, single-line JSON dumps).
+4. **Automated Secret Redaction:**
+   - Redacts private keys (`BEGIN PRIVATE KEY`), AWS Access Keys (`AKIA...`), GitHub PATs (`ghp_...`), and key-value API tokens (`api_key = "..."`).
+   - Summary statistics display how many tokens were sanitized.
 
 ---
 
 ## 📄 License
 
-Distributed under the MIT License. See `LICENSE` for more information.
+Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
