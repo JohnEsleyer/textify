@@ -1,5 +1,6 @@
 # Textify ⚡
 
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
