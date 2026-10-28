@@ -39,6 +39,8 @@ func main() {
 		runStart(args, false, true)
 	case "load":
 		runLoad(args)
+	case "grep", "search", "find":
+		runGrep(args)
 	case "prompt":
 		printPrompt()
 	case "version", "-v", "--version":
@@ -200,6 +202,78 @@ func runStart(args []string, signaturesOnly, diffOnly bool) {
 	fmt.Printf("--------------------------------------------------\n")
 }
 
+func runGrep(args []string) {
+	fs := flag.NewFlagSet("grep", flag.ExitOnError)
+	contextFlag := fs.Int("C", 2, "Lines of context around matching lines")
+	clipFlag := fs.Bool("clip", false, "Copy output directly to clipboard")
+	clipShortFlag := fs.Bool("c", false, "Copy output directly to clipboard (shorthand)")
+	globFlag := fs.String("glob", "", "Filter files by glob pattern (e.g. *.go)")
+	stdoutFlag := fs.Bool("stdout", false, "Stream output directly to standard output")
+	noRedactFlag := fs.Bool("no-redact", false, "Disable sensitive secret scrubbing")
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	positional := fs.Args()
+	if len(positional) == 0 {
+		fmt.Println("Error: Missing search pattern.")
+		fmt.Println("Usage: textify grep <pattern> [-C context] [-c] [--glob pattern]")
+		os.Exit(1)
+	}
+
+	pattern := positional[0]
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		cfg = &config.Config{OutputFile: "codebase.txt"}
+	}
+
+	req := scanner.FileRequest{
+		Query:   pattern,
+		Context: *contextFlag,
+		Glob:    *globFlag,
+	}
+
+	var outputBuf bytes.Buffer
+	if !*stdoutFlag {
+		fmt.Printf("Searching for %q across project...\n", pattern)
+	}
+
+	opts := scanner.ScanOptions{
+		Format:        "raw",
+		RedactSecrets: !*noRedactFlag,
+		Stdout:        *stdoutFlag,
+	}
+
+	result, err := scanner.LoadRequests(cwd, cfg, []scanner.FileRequest{req}, &outputBuf, opts)
+	if err != nil {
+		fmt.Printf("Grep error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *stdoutFlag || (!*clipFlag && !*clipShortFlag) {
+		os.Stdout.Write(outputBuf.Bytes())
+	}
+
+	if *clipFlag || *clipShortFlag {
+		if clipErr := fileutil.CopyToClipboard(outputBuf.String()); clipErr == nil {
+			fmt.Println("\n✔ Grep results copied to system clipboard!")
+		} else {
+			fmt.Printf("Notice: Could not copy to clipboard (%v)\n", clipErr)
+		}
+	}
+
+	if !*stdoutFlag {
+		fmt.Printf("\nMatched in %d file(s) (~%d tokens).\n", result.FilesCount, result.ApproxTokens)
+	}
+}
+
 func runLoad(args []string) {
 	fs := flag.NewFlagSet("load", flag.ExitOnError)
 	formatFlag := fs.String("format", "", "Output format: raw, markdown, or xml")
@@ -258,7 +332,7 @@ func runLoad(args []string) {
 		}
 		if len(reqData) == 0 {
 			if clipText, err := fileutil.ReadFromClipboard(); err == nil {
-				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<request") || strings.Contains(clipText, "<slice") {
+				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<request") || strings.Contains(clipText, "<grep") {
 					reqData = []byte(clipText)
 					fmt.Println("Auto-detected request from system clipboard")
 				}
@@ -275,8 +349,8 @@ func runLoad(args []string) {
 
 	requests := scanner.ParseRequest(string(reqData))
 	if len(requests) == 0 {
-		fmt.Println("No valid file requests found in the input.")
-		fmt.Println("Ensure the request contains <request><file path=\"...\" /></request> or bullet lists.")
+		fmt.Println("No valid file or grep requests found in the input.")
+		fmt.Println("Ensure the request contains <request><file path=\"...\" /></request>, <grep ... />, or bullet lists.")
 		os.Exit(1)
 	}
 
@@ -303,7 +377,7 @@ func runLoad(args []string) {
 
 	var outputBuf bytes.Buffer
 	if !*stdoutFlag {
-		fmt.Printf("Loading %d file request(s)...\n", len(requests))
+		fmt.Printf("Loading %d file/grep request(s)...\n", len(requests))
 	}
 
 	result, err := scanner.LoadRequests(cwd, cfg, requests, &outputBuf, opts)
@@ -337,7 +411,7 @@ func runLoad(args []string) {
 
 	fmt.Printf("\n✔ Done! Detailed sections saved to: %s\n", cfg.OutputFile)
 	fmt.Printf("--------------------------------------------------\n")
-	fmt.Printf("Sections loaded: %d\n", result.FilesCount)
+	fmt.Printf("Files included:  %d\n", result.FilesCount)
 	fmt.Printf("Total size:      %.2f KB\n", float64(result.TotalBytes)/1024.0)
 	fmt.Printf("Approx. tokens:  ~%d tokens\n", result.ApproxTokens)
 	if result.RedactedSecrets > 0 {
@@ -350,22 +424,31 @@ func printPrompt() {
 	fmt.Println(`Copy and paste this prompt to the LLM alongside your signatures:
 --------------------------------------------------------------------------------
 Here is the project outline and signatures with line numbers.
-Analyze them. If you need full implementations of specific files,
-line ranges, keyword searches, or symbols, respond using this format:
+Analyze them. If you need implementations of specific logic, DO NOT GUESS LINE NUMBERS.
+Use targeted requests:
 
 <request>
-  <file path="path/to/file.ext" />
+  <!-- Search keyword across all files with context -->
+  <grep pattern="search_term" context="10" />
+
+  <!-- Find code inside a file by keyword or anchor -->
+  <file path="path/to/file.ext" find="keyword_or_statement" context="15" />
+
+  <!-- Extract a block from start pattern to end pattern -->
+  <file path="path/to/file.ext" from="case *MyType:" to="case *" />
+
+  <!-- Extract an entire function or struct by symbol name -->
+  <file path="path/to/file.ext" symbol="function_or_struct_name" />
+
+  <!-- Explicit line range (only if already known from signatures above) -->
   <file path="path/to/file.ext" lines="50-120" />
-  <file path="path/to/file.ext" lines="10-25, 80-100" />
-  <file path="path/to/file.ext" lines="100:" />
-  <file path="path/to/file.ext" search="function_or_keyword" context="5" />
-  <file path="path/to/file.ext" symbols="FunctionName,TypeName" />
-  <file glob="pkg/compiler/*_test.go" />
 </request>
 
-Markdown lists are also supported:
-- path/to/file.ext:50-120
-- path/to/file.ext (search: "keyword")
+Markdown bullet lists are also supported:
+- grep: "search_term"
+- path/to/file.ext (find: "keyword", context: 15)
+- path/to/file.ext (from: "case *Foo:", to: "case *")
+- path/to/file.ext (symbol: MyFunction)
 
 Otherwise, proceed directly with your solution.
 --------------------------------------------------------------------------------`)
@@ -379,9 +462,14 @@ func printHelp() {
 	fmt.Println("  textify start [flags]        Generates output file based on configuration")
 	fmt.Println("  textify signatures [flags]   Extracts structs, types, interfaces, and function signatures")
 	fmt.Println("  textify diff [flags]         Only includes modified and untracked git files")
+	fmt.Println("  textify grep <pattern> [opts]Searches project for pattern and outputs matching context")
 	fmt.Println("  textify load [file] [flags]  Extracts requested files, slices, searches, or symbols")
 	fmt.Println("  textify prompt               Prints the instruction prompt to paste to the LLM")
 	fmt.Println("  textify version              Shows current version")
+	fmt.Println("\nFlags for grep:")
+	fmt.Println("  -C <num>                     Lines of context around match (default 2)")
+	fmt.Println("  --clip, -c                   Copy grep results to clipboard")
+	fmt.Println("  --glob <pattern>             Filter files by glob (e.g. *.go)")
 	fmt.Println("\nFlags for load:")
 	fmt.Println("  --clip-in, -ci               Read request directly from system clipboard")
 	fmt.Println("  --clip, -c                   Copy output slices directly to system clipboard")

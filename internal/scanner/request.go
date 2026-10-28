@@ -29,21 +29,31 @@ type FileRequest struct {
 	End     int // Legacy compatibility (first range end)
 	Symbols []string
 	Query   string // Text or regex pattern to search for
-	Context int    // Context lines around query matches (default 5)
+	Context int    // Context lines around query matches (default 10)
 	Glob    string // Glob pattern to match multiple files
+	From    string // Start pattern for block extraction
+	To      string // End pattern for block extraction
+	Anchor  string // Anchor pattern
 }
 
 var (
-	// Matches XML-style tags: <file ... />, <slice ... />, <read ... />, <get ... />
-	xmlTagRegex    = regexp.MustCompile(`(?i)<(?:file|slice|read|get)\s+([^>]+?)(?:/>|>.*?</(?:file|slice|read|get)>|>)`)
+	// Matches XML-style file/slice tags
+	xmlTagRegex = regexp.MustCompile(`(?i)<(?:file|slice|read|get)\s+([^>]+?)(?:/>|>.*?</(?:file|slice|read|get)>|>)`)
+
+	// Matches XML-style project-wide grep/search tags: <grep pattern="foo" context="10" />
+	xmlGrepRegex = regexp.MustCompile(`(?i)<(?:grep|search|find)\s+([^>]+?)(?:/>|>.*?</(?:grep|search|find)>|>)`)
+
 	xmlAttrPath    = regexp.MustCompile(`(?i)\b(?:path|file|src)=["']([^"']+)["']`)
 	xmlAttrLines   = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
 	xmlAttrSymbols = regexp.MustCompile(`(?i)\bsymbols?=["']([^"']+)["']`)
-	xmlAttrSearch  = regexp.MustCompile(`(?i)\b(?:search|grep|query|pattern)=["']([^"']+)["']`)
+	xmlAttrSearch  = regexp.MustCompile(`(?i)\b(?:search|grep|query|pattern|find|around)=["']([^"']+)["']`)
+	xmlAttrFrom    = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	xmlAttrTo      = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
+	xmlAttrAnchor  = regexp.MustCompile(`(?i)\banchor=["']([^"']+)["']`)
 	xmlAttrContext = regexp.MustCompile(`(?i)\bcontext=["'](\d+)["']`)
 	xmlAttrGlob    = regexp.MustCompile(`(?i)\bglob=["']([^"']+)["']`)
 
-	// Markdown bullet patterns like: - path/to/file.go:50-120 or - `path/to/file.go`:10-20, 50-80
+	// Markdown bullet patterns like: - path/to/file.go:50-120 or - grep: "keyword"
 	mdLinePattern = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+\.)(?:\s+\[[ xX]\])?\s+` + "`?" + `([^\s:` + "`" + `]+)` + "`?" + `(?:\s*[:(]\s*([^\r\n)]+)\)?)?`)
 )
 
@@ -58,7 +68,6 @@ func ParseLineRanges(s string) []LineRange {
 			continue
 		}
 
-		// Open-ended range like "100:" or "100+" or "100.."
 		if strings.HasSuffix(part, ":") || strings.HasSuffix(part, "+") || strings.HasSuffix(part, "..") {
 			trimmed := strings.TrimRight(part, ":+.")
 			val, err := strconv.Atoi(trimmed)
@@ -68,7 +77,6 @@ func ParseLineRanges(s string) []LineRange {
 			continue
 		}
 
-		// Leading open range like ":50" or "..50"
 		if strings.HasPrefix(part, ":") || strings.HasPrefix(part, "..") {
 			trimmed := strings.TrimLeft(part, ":.")
 			val, err := strconv.Atoi(trimmed)
@@ -78,7 +86,6 @@ func ParseLineRanges(s string) []LineRange {
 			continue
 		}
 
-		// Standard range like "50-120"
 		if idx := strings.IndexAny(part, "-:"); idx != -1 {
 			startStr := strings.TrimSpace(part[:idx])
 			endStr := strings.TrimSpace(part[idx+1:])
@@ -92,7 +99,6 @@ func ParseLineRanges(s string) []LineRange {
 			continue
 		}
 
-		// Single line like "42"
 		val, err := strconv.Atoi(part)
 		if err == nil {
 			ranges = append(ranges, LineRange{Start: val, End: val})
@@ -102,13 +108,44 @@ func ParseLineRanges(s string) []LineRange {
 	return ranges
 }
 
-// ParseRequest parses an LLM response containing file requests.
-// Supports rich XML tags and various Markdown list formats.
+// ParseRequest parses an LLM response containing file or grep requests.
 func ParseRequest(input string) []FileRequest {
 	var requests []FileRequest
 	seen := make(map[string]bool)
 
-	// 1. Try XML Tag Matching first
+	// 1. Project-wide <grep ... /> or <search ... /> tags
+	grepMatches := xmlGrepRegex.FindAllStringSubmatch(input, -1)
+	for _, m := range grepMatches {
+		attrs := m[1]
+		searchMatch := xmlAttrSearch.FindStringSubmatch(attrs)
+		if len(searchMatch) < 2 {
+			continue
+		}
+
+		ctx := 10
+		if ctxMatch := xmlAttrContext.FindStringSubmatch(attrs); len(ctxMatch) >= 2 {
+			ctx, _ = strconv.Atoi(ctxMatch[1])
+		}
+
+		globVal := ""
+		if globMatch := xmlAttrGlob.FindStringSubmatch(attrs); len(globMatch) >= 2 {
+			globVal = filepath.ToSlash(strings.TrimSpace(globMatch[1]))
+		}
+
+		req := FileRequest{
+			Query:   strings.TrimSpace(searchMatch[1]),
+			Context: ctx,
+			Glob:    globVal,
+		}
+
+		key := fmt.Sprintf("GREP|%s|%d|%s", req.Query, req.Context, req.Glob)
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, req)
+		}
+	}
+
+	// 2. File-specific <file ... /> or <slice ... /> tags
 	matches := xmlTagRegex.FindAllStringSubmatch(input, -1)
 	for _, m := range matches {
 		attrs := m[1]
@@ -158,12 +195,25 @@ func ParseRequest(input string) []FileRequest {
 			req.Query = strings.TrimSpace(searchMatch[1])
 		}
 
-		if ctxMatch := xmlAttrContext.FindStringSubmatch(attrs); len(ctxMatch) >= 2 {
-			ctx, _ := strconv.Atoi(ctxMatch[1])
-			req.Context = ctx
+		if fromMatch := xmlAttrFrom.FindStringSubmatch(attrs); len(fromMatch) >= 2 {
+			req.From = strings.TrimSpace(fromMatch[1])
 		}
 
-		key := fmt.Sprintf("%s|%v|%s|%s", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query)
+		if toMatch := xmlAttrTo.FindStringSubmatch(attrs); len(toMatch) >= 2 {
+			req.To = strings.TrimSpace(toMatch[1])
+		}
+
+		if anchorMatch := xmlAttrAnchor.FindStringSubmatch(attrs); len(anchorMatch) >= 2 {
+			req.Anchor = strings.TrimSpace(anchorMatch[1])
+		}
+
+		ctx := 10
+		if ctxMatch := xmlAttrContext.FindStringSubmatch(attrs); len(ctxMatch) >= 2 {
+			ctx, _ = strconv.Atoi(ctxMatch[1])
+		}
+		req.Context = ctx
+
+		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
@@ -174,7 +224,7 @@ func ParseRequest(input string) []FileRequest {
 		return requests
 	}
 
-	// 2. Fallback to Markdown bullet lists
+	// 3. Fallback to Markdown bullet lists
 	mdMatches := mdLinePattern.FindAllStringSubmatch(input, -1)
 	for _, m := range mdMatches {
 		p := filepath.ToSlash(strings.Trim(strings.TrimSpace(m[1]), "`'\""))
@@ -182,21 +232,49 @@ func ParseRequest(input string) []FileRequest {
 			continue
 		}
 
-		req := FileRequest{Path: p}
+		// Check for markdown bullet grep: - grep: "keyword"
+		if p == "grep" || p == "search" || p == "find" {
+			query := ""
+			if len(m) >= 3 && m[2] != "" {
+				query = strings.Trim(strings.TrimSpace(m[2]), `"' `)
+			}
+			if query != "" {
+				req := FileRequest{Query: query, Context: 10}
+				key := fmt.Sprintf("GREP|%s", query)
+				if !seen[key] {
+					seen[key] = true
+					requests = append(requests, req)
+				}
+				continue
+			}
+		}
+
+		req := FileRequest{Path: p, Context: 10}
 
 		if len(m) >= 3 && m[2] != "" {
 			detail := strings.TrimSpace(m[2])
 
-			// Check for search / grep pattern in bullet: (grep: "foo")
-			if strings.HasPrefix(detail, "search:") || strings.HasPrefix(detail, "grep:") {
+			switch {
+			case strings.HasPrefix(detail, "search:") || strings.HasPrefix(detail, "grep:") || strings.HasPrefix(detail, "find:"):
 				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
 				req.Query = strings.Trim(val, `"' `)
-			} else if strings.HasPrefix(detail, "symbols:") || strings.HasPrefix(detail, "symbol:") {
+			case strings.HasPrefix(detail, "symbols:") || strings.HasPrefix(detail, "symbol:"):
 				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
 				for _, sym := range strings.Split(val, ",") {
 					req.Symbols = append(req.Symbols, strings.TrimSpace(sym))
 				}
-			} else {
+			case strings.HasPrefix(detail, "from:"):
+				// format: (from: "A", to: "B")
+				parts := strings.Split(detail, ",")
+				for _, part := range parts {
+					part = strings.TrimSpace(part)
+					if strings.HasPrefix(part, "from:") {
+						req.From = strings.Trim(strings.TrimSpace(part[5:]), `"' `)
+					} else if strings.HasPrefix(part, "to:") {
+						req.To = strings.Trim(strings.TrimSpace(part[3:]), `"' `)
+					}
+				}
+			default:
 				detail = strings.TrimPrefix(detail, "lines")
 				req.Ranges = ParseLineRanges(detail)
 				if len(req.Ranges) > 0 {
@@ -206,7 +284,7 @@ func ParseRequest(input string) []FileRequest {
 			}
 		}
 
-		key := fmt.Sprintf("%s|%v|%s|%s", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query)
+		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
@@ -232,9 +310,36 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 
 	result := &ScanResult{}
 
-	// Expand globs if any request targets multiple files
+	// Expand requests (globs or project-wide greps)
 	var expandedRequests []FileRequest
 	for _, req := range requests {
+		// Project-wide grep (no specific file path)
+		if req.Path == "" && req.Query != "" {
+			pattern := req.Glob
+			if pattern == "" {
+				pattern = "*"
+			}
+			matchedFiles := findMatchingFiles(rootPath, pattern)
+			for _, mf := range matchedFiles {
+				absPath := filepath.Join(rootPath, filepath.FromSlash(mf))
+				if isBin, err := fileutil.IsBinary(absPath); err != nil || isBin {
+					continue
+				}
+				data, err := os.ReadFile(absPath)
+				if err != nil {
+					continue
+				}
+				// Only include file if it actually contains the query
+				if fileMatchesQuery(string(data), req.Query) {
+					clone := req
+					clone.Path = mf
+					expandedRequests = append(expandedRequests, clone)
+				}
+			}
+			continue
+		}
+
+		// Explicit glob path
 		if req.Glob != "" || strings.ContainsAny(req.Path, "*?[") {
 			pattern := req.Glob
 			if pattern == "" {
@@ -288,7 +393,15 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 
 		if !opts.Stdout {
 			desc := "full"
-			if len(req.Ranges) > 0 {
+			if req.From != "" {
+				desc = fmt.Sprintf("from: %q to: %q", req.From, req.To)
+			} else if req.Anchor != "" {
+				desc = fmt.Sprintf("anchor: %q", req.Anchor)
+			} else if req.Query != "" {
+				desc = fmt.Sprintf("find: %q (±%d lines)", req.Query, req.Context)
+			} else if len(req.Symbols) > 0 {
+				desc = fmt.Sprintf("symbols: %s", strings.Join(req.Symbols, ", "))
+			} else if len(req.Ranges) > 0 {
 				var rStrs []string
 				for _, r := range req.Ranges {
 					if r.End > 0 {
@@ -298,10 +411,6 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 					}
 				}
 				desc = fmt.Sprintf("lines %s", strings.Join(rStrs, ", "))
-			} else if req.Query != "" {
-				desc = fmt.Sprintf("search: %q", req.Query)
-			} else if len(req.Symbols) > 0 {
-				desc = fmt.Sprintf("symbols: %s", strings.Join(req.Symbols, ", "))
 			}
 			fmt.Printf("Added: %s (%s)\n", req.Path, desc)
 		}
@@ -309,6 +418,16 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 
 	result.ApproxTokens = int(result.TotalBytes / 4)
 	return result, nil
+}
+
+func fileMatchesQuery(content, query string) bool {
+	if query == "" {
+		return true
+	}
+	if re, err := regexp.Compile("(?i)" + query); err == nil {
+		return re.MatchString(content)
+	}
+	return strings.Contains(strings.ToLower(content), strings.ToLower(query))
 }
 
 func extractSections(content string, req FileRequest) (string, int, int) {
@@ -320,11 +439,80 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 
 	var intervals []LineRange
 
-	// 1. Text Search / Grep with context
+	// 1. Pattern-bounded range: from="..." to="..."
+	if req.From != "" {
+		fromRe, fromErr := regexp.Compile("(?i)" + req.From)
+		toRe, toErr := regexp.Compile("(?i)" + req.To)
+		fromLower := strings.ToLower(req.From)
+		toLower := strings.ToLower(req.To)
+
+		inBlock := false
+		startLine := 1
+
+		for idx, line := range lines {
+			lineNum := idx + 1
+			lineLower := strings.ToLower(line)
+
+			if !inBlock {
+				matched := false
+				if fromErr == nil {
+					matched = fromRe.MatchString(line)
+				} else {
+					matched = strings.Contains(lineLower, fromLower)
+				}
+				if matched {
+					inBlock = true
+					startLine = lineNum
+				}
+			} else {
+				matched := false
+				if req.To != "" {
+					if toErr == nil {
+						matched = toRe.MatchString(line)
+					} else {
+						matched = strings.Contains(lineLower, toLower)
+					}
+				}
+				if matched {
+					intervals = append(intervals, LineRange{Start: startLine, End: lineNum})
+					inBlock = false
+				}
+			}
+		}
+		if inBlock {
+			intervals = append(intervals, LineRange{Start: startLine, End: totalLines})
+		}
+	}
+
+	// 2. Anchor with forward window
+	if req.Anchor != "" {
+		ctx := req.Context
+		if ctx <= 0 {
+			ctx = 15
+		}
+		aLower := strings.ToLower(req.Anchor)
+		for idx, line := range lines {
+			if strings.Contains(strings.ToLower(line), aLower) {
+				lineNum := idx + 1
+				st := lineNum - 2
+				if st < 1 {
+					st = 1
+				}
+				en := lineNum + ctx
+				if en > totalLines {
+					en = totalLines
+				}
+				intervals = append(intervals, LineRange{Start: st, End: en})
+				break
+			}
+		}
+	}
+
+	// 3. Keyword / Query search with context
 	if req.Query != "" {
 		ctx := req.Context
 		if ctx <= 0 {
-			ctx = 5
+			ctx = 10
 		}
 		qLower := strings.ToLower(req.Query)
 		re, reErr := regexp.Compile("(?i)" + req.Query)
@@ -351,13 +539,13 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		}
 	}
 
-	// 2. Symbol Extraction
+	// 4. Symbol Extraction
 	if len(req.Symbols) > 0 {
 		symIntervals := findSymbolIntervals(lines, req.Symbols)
 		intervals = append(intervals, symIntervals...)
 	}
 
-	// 3. Explicit Line Ranges
+	// 5. Explicit Line Ranges
 	if len(req.Ranges) > 0 {
 		for _, r := range req.Ranges {
 			st := r.Start
@@ -375,9 +563,9 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		}
 	}
 
-	// If no specific intervals were requested or matched, return the full file
+	// If no filters matched or specified, return full file
 	if len(intervals) == 0 {
-		if req.Query != "" || len(req.Symbols) > 0 {
+		if req.Query != "" || req.From != "" || req.Anchor != "" || len(req.Symbols) > 0 {
 			return fmt.Sprintf("/* No matches found in %s */\n", req.Path), 1, totalLines
 		}
 		var sb strings.Builder
@@ -387,7 +575,6 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		return sb.String(), 1, totalLines
 	}
 
-	// Merge overlapping and contiguous intervals
 	merged := mergeRanges(intervals)
 
 	var sb strings.Builder
@@ -461,7 +648,6 @@ func findSymbolIntervals(lines []string, symbols []string) []LineRange {
 				startLine := idx + 1
 				endLine := startLine
 
-				// Walk forward to find declaration end
 				braceCount := 0
 				foundBrace := false
 				for j := idx; j < len(lines); j++ {
