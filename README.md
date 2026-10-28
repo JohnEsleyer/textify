@@ -1,23 +1,21 @@
-
 # Textify ⚡
 
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Textify** is a high-performance CLI tool that converts your codebase into structured, AI-ready context for Large Language Models (LLMs) such as Claude, ChatGPT, DeepSeek, and Gemini.
+**Textify** is a high-performance CLI tool that converts your codebase into structured, AI-ready context for Large Language Models (LLMs) like Claude, ChatGPT, DeepSeek, and Gemini.
 
-Instead of pasting random files into chat windows, Textify structures your project with directory trees, 1-based source line numbers, automated secret redaction, and intelligent filtering.
+Instead of dumping bloated folders into chat windows, Textify structures your project with directory trees, 1-based source line numbers, automated secret redaction, and a **2-stage interactive workflow** that saves up to 90% of your tokens.
 
 ---
 
-## 💡 Why Textify?
+## 🌟 Why Textify?
 
-- 📉 **Save 80–90% of Tokens:** Use the **2-stage interactive workflow**—export function/type signatures first, prompt the LLM, then slice out only the exact files or line ranges it asks to see.
-- 🎯 **Ground AI with Line Numbers:** Every line is indexed (`  120 | func Run()`), enabling LLMs to provide exact line references, diffs, and surgical refactorings.
-- 🛡️ **Built-in Security:** Automatic secret redaction for API keys, AWS credentials, GitHub tokens, and private keys before code leaves your machine.
-- 🌲 **Context-Aware Visual Tree:** Automatically prepends an ASCII directory tree of the included files.
-- 🧠 **Nested `.gitignore` & Binary Detection:** Respects multi-tier `.gitignore` files, automatically detects binary files, and ignores minified assets (>2,000 chars/line).
-- 📋 **Zero-Friction Clipboard Integration:** Native clipboard copy (`--clip` / `-c`) supporting macOS (`pbcopy`), Linux (`wl-copy`, `xclip`, `xsel`), Windows (`clip`), and terminal OSC 52 fallback.
+- 📉 **Save 80–90% of Tokens:** Export lightweight type and function signatures first. Then, load only the exact files, line ranges, or search terms requested by the AI.
+- 🎯 **Ground AI with Line Numbers:** Every source line is indexed (`  120 | func Run()`), enabling LLMs to write surgical edits and accurate patch directives.
+- 🔍 **Flexible Request Directives:** Slices, multiple ranges, open-ended ranges, keyword searches (`search`/`grep`), and symbol extraction are all supported out-of-the-box.
+- 📋 **1-Click Clipboard Workflow:** Pipe requests straight from clipboard to clipboard with `textify load -ci -c`. Zero file juggling required.
+- 🛡️ **Automated Secret Redaction:** Scrub API keys, private keys, AWS tokens, and GitHub PATs before code ever leaves your machine.
 
 ---
 
@@ -28,54 +26,17 @@ Instead of pasting random files into chat windows, Textify structures your proje
 go install github.com/JohnEsleyer/textify/cmd/textify@latest
 ```
 
-### Option 2: Build from Source
+### Option 2: Build and Install from Source
 ```bash
 git clone https://github.com/JohnEsleyer/textify.git
 cd textify
-go build -o textify ./cmd/textify
-sudo mv textify /usr/local/bin/   # Optional: move to PATH
+go install .
 ```
+*(Or compile locally with `go build .`)*
 
 ---
 
-## ⚡ Quick Start
-
-```bash
-# 1. Initialize configuration by scanning your repository
-textify init
-
-# 2. Bundle your codebase and copy directly to your clipboard
-textify start -c
-```
-
-The output file (default: `codebase.txt`) is generated with line-numbered XML-style tags, an ASCII tree, and token usage statistics:
-
-```xml
-PROJECT STRUCTURE:
-├── cmd/
-│   └── textify/
-│       └── main.go
-└── internal/
-    └── scanner/
-        └── scanner.go
-
-============================================================
-
-<file path="cmd/textify/main.go" lines="1-50">
-    1 | package main
-    2 | 
-    3 | import (
-    4 |     "fmt"
-...
-   50 | }
-</file>
-```
-
----
-
-## 🎯 2-Stage Interactive Mode (Save Thousands of Tokens)
-
-For large codebases, dumping all source files wastes context windows and inflates costs. Use Textify's two-step interaction:
+## 🎯 The 2-Stage Interactive Workflow
 
 ```
 ┌─────────────────┐       1. textify signatures -c      ┌─────────────────┐
@@ -87,158 +48,145 @@ For large codebases, dumping all source files wastes context windows and inflate
 │                 │       3. LLM returns <request> tags │                 │
 └────────┬────────┘                                     └─────────────────┘
          │
-         │ 4. textify load request.txt -c
+         │ 4. textify load -ci -c
          ▼
    Clipboard filled with ONLY
    requested lines & functions
 ```
 
-### Step 1: Export Signatures & Prompt the LLM
-Export structs, types, interfaces, and function signatures without implementations (docs like `.md` stay fully intact):
-```bash
-textify signatures -c
+### Stage 1: Export Signatures & Prompt the LLM
+1. Extract signatures and copy them to your clipboard:
+   ```bash
+   textify signatures -c
+   ```
+2. Paste into your LLM chat.
+3. Append instructions by copying from `textify prompt`:
+   > *"If you need full implementations, respond using `<request><file path="..." lines="X-Y" /></request>`."*
+
+### Stage 2: Load the AI's Request
+Once the AI responds with requested files:
+1. **Instant Clipboard Workflow:** Click "Copy" on the AI's response, then run:
+   ```bash
+   textify load -ci -c
+   ```
+   *Your clipboard is immediately replaced with the requested line ranges, formatted and ready to paste!*
+2. **File Workflow:** Or save the response into `request.txt` and run:
+   ```bash
+   textify load -c
+   ```
+
+---
+
+## 📋 Comprehensive Request Directives Reference
+
+Textify's `load` command supports multiple intuitive ways for LLMs to request code:
+
+### 1. XML Directives (`<request> ... </request>`)
+
+#### Specific Line Ranges
+```xml
+<request>
+  <!-- Single line range -->
+  <file path="pkg/compiler/ast.go" lines="50-120" />
+
+  <!-- Multiple line ranges in a single file -->
+  <file path="pkg/compiler/typechecker.go" lines="10-35, 120-160" />
+
+  <!-- From line 100 through end of file -->
+  <file path="pkg/compiler/codegen.go" lines="100:" />
+
+  <!-- From start of file through line 50 -->
+  <file path="pkg/compiler/parser.go" lines=":50" />
+</request>
 ```
-Paste this into your LLM. Then run:
-```bash
-textify prompt
+
+#### Keyword & Pattern Search (`search` / `grep` / `context`)
+When the AI knows what code to look for but doesn't know exact line numbers:
+```xml
+<request>
+  <!-- Search for a keyword with 5 lines of context before and after -->
+  <file path="pkg/compiler/codegen_expr.go" search="PromoteExpr" context="5" />
+
+  <!-- Regex search -->
+  <file path="runtime/ube_runtime.h" grep="ube_arena_.*enter" context="10" />
+</request>
 ```
-Copy the output instructions and append them to your query:
-> *"If you need full implementations, respond using `<request><file path="..." lines="X-Y" /></request>`."*
 
-### Step 2: Load the LLM's Request
-Save the LLM's response into `request.txt` (Textify ignores surrounding conversational text).
+#### Symbol Extraction (`symbols`)
+Extract specific functions, structs, or methods:
+```xml
+<request>
+  <file path="pkg/compiler/typechecker_expr.go" symbols="inferExpr,checkCallArgs" />
+</request>
+```
 
-**Supported formats within the response:**
-* XML tags (Recommended):
-  ```xml
-  <request>
-    <file path="cmd/textify/main.go" />
-    <file path="internal/scanner/scanner.go" lines="50-120" />
-    <file path="internal/config/config.go" symbols="Config,DirRule" />
-  </request>
-  ```
-* Markdown lists:
-  ```markdown
-  - cmd/textify/main.go
-  - internal/scanner/scanner.go:50-120
-  ```
+#### Glob Patterns & Whole Files
+```xml
+<request>
+  <!-- Entire file -->
+  <file path="cmd/ube/main.go" />
 
-Then load the exact slices and copy them directly to your clipboard:
-```bash
-textify load request.txt -c
+  <!-- All files matching a glob pattern -->
+  <file glob="tests/test_*.ube" />
+</request>
+```
+
+*Note: `<slice ... />`, `<read ... />`, and `<get ... />` tags are also accepted as aliases for `<file ... />`.*
+
+---
+
+### 2. Markdown Bullet Lists
+
+Textify also parses standard Markdown lists:
+
+```markdown
+- cmd/ube/main.go:50-120
+- `pkg/compiler/parser.go`:10-30, 80-110
+- pkg/compiler/codegen.go (lines 100:)
+- pkg/compiler/lexer.go (search: "TokenPromote")
+- pkg/compiler/ast.go (symbols: Program, Node)
+- examples/01_hello/main.ube
 ```
 
 ---
 
-## 🛠️ Commands
+## 🛠️ CLI Commands & Flags
 
 | Command | Description |
 | :--- | :--- |
-| `textify init` | Scans directory tree, checks `.gitignore` rules, and generates `textify.yaml`. |
-| `textify scan` | Detects new directories and safely appends them to `textify.yaml` without overwriting existing settings. |
+| `textify init` | Scans directory tree and generates `textify.yaml`. |
+| `textify scan` | Detects new directories and appends them to `textify.yaml`. |
 | `textify start` | Bundles project files based on rules in `textify.yaml`. |
-| `textify signatures` | Extracts types, structs, interfaces, and function headers while preserving line numbers. |
-| `textify diff` | Bundles **only** modified, staged, or untracked Git files (`git status --porcelain`). |
-| `textify load <file>` | Extracts specific files, line ranges, or symbols requested by the LLM. |
-| `textify prompt` | Prints copy-pasteable instructions for the LLM during Stage 1. |
+| `textify signatures` | Extracts types, structs, interfaces, and function headers. |
+| `textify diff` | Bundles **only** modified, staged, or untracked Git files. |
+| `textify load [file]` | Extracts specific files, slices, searches, or symbols. |
+| `textify prompt` | Prints copy-pasteable instructions for the LLM. |
 | `textify version` | Prints current version. |
 | `textify help` | Shows CLI usage and available options. |
 
----
-
-## 🚩 Command Flags
-
-Available for `start`, `signatures`, `diff`, and `load`:
+### `textify load` Flags
 
 | Flag | Shorthand | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `--clip` | `-c` | `false` | Copies generated output directly to your system clipboard. |
-| `--format` | | `raw` / `xml` | Output styling: `xml` (or `tags`), `markdown`, or `raw`. |
-| `--stdout` | | `false` | Writes directly to stdout (useful for piping: `textify start --stdout \| pbcopy`). |
-| `--no-tree` | | `false` | Disables prepending the ASCII directory structure map. |
-| `--no-redact` | | `false` | Disables automatic scrubbing of sensitive tokens/API keys. |
-| `-o <file>` | | *(config)* | Override output destination filename (`load` command only). |
+| `--clip-in` | `-ci` | `false` | Reads request directly from system clipboard. |
+| `--clip` | `-c` | `false` | Copies output slices directly to system clipboard. |
+| `--format` | | `raw` | Output format: `raw`, `markdown`, or `xml`. |
+| `--stdout` | | `false` | Streams output directly to standard output (for piping). |
+| `--no-redact` | | `false` | Disables automated scrubbing of sensitive tokens/keys. |
+| `-o <file>` | | *(config)* | Override output destination filename. |
 
----
+### Examples
 
-## ⚙️ Configuration (`textify.yaml`)
+```bash
+# 1-Click Clipboard workflow: Read request from clipboard, put slices back on clipboard
+textify load -ci -c
 
-`textify init` creates a commented `textify.yaml` at your project root.
+# Load from request.txt and copy to clipboard
+textify load request.txt -c
 
-```yaml
-# Global Output Configuration
-output_file: codebase.txt
-format: raw              # Options: raw, markdown, xml
-tree: true               # Prepend ASCII directory map (default: true)
-max_file_size: 512000    # File size limit in bytes (default: 500 KB)
-
-dirs:
-  # Root directory settings
-  .:
-    enabled: true
-    extensions:
-      - go
-      - md
-      - yaml
-    include:
-      - .env.example     # Force-include ignored files or specific dotfiles
-
-  # Backend directory
-  cmd:
-    enabled: true
-    extensions:
-      - go
-
-  # Frontend directory
-  frontend:
-    enabled: true
-    compact: true        # Strips extra blank lines & leading/trailing whitespace
-    extensions:
-      - ts
-      - tsx
-      - css
-    exclude:
-      - "**/*.test.ts"   # Skip test files
-    exclude_extensions:
-      - map
-
-  # Excluded directories
-  node_modules:
-    enabled: false
-
-  dist:
-    enabled: false
+# Pipe from stdin and copy to clipboard
+cat request.txt | textify load - -c
 ```
-
-### Directory Rule Reference
-
-| Property | Type | Description |
-| :--- | :---: | :--- |
-| `enabled` | `bool` | Set to `false` to skip this folder and all its subdirectories. |
-| `compact` | `bool` | Strips empty lines and trims whitespace to optimize token usage. |
-| `extensions` | `list` | Allow-list of extensions (e.g., `[go, ts]`). If empty, all text files are allowed. |
-| `exclude_extensions` | `list` | Block-list of extensions (e.g., `[tmp, log, map]`). |
-| `include` | `list` | Glob patterns/files to **force-include** (bypasses `.gitignore` and extension filters). |
-| `exclude` | `list` | Glob patterns/files to **force-exclude** (highest priority). |
-
----
-
-## 🛡️ Built-in Exclusions & Security
-
-Textify safeguards context windows and prevents accidental credential leaks:
-
-1. **Always Excluded:**
-   - `.git/` folder
-   - `textify.yaml` configuration
-   - The configured `output_file`
-2. **Binary & Asset Detection:**
-   - Evaluates the first 512 bytes for null bytes and invalid UTF-8 sequences.
-   - Automatically drops images, PDFs, compiled executables, etc.
-3. **Minified Asset Guard:**
-   - Skips files with line lengths exceeding 2,000 characters (e.g., minified JS bundles, single-line JSON dumps).
-4. **Automated Secret Redaction:**
-   - Redacts private keys (`BEGIN PRIVATE KEY`), AWS Access Keys (`AKIA...`), GitHub PATs (`ghp_...`), and key-value API tokens (`api_key = "..."`).
-   - Summary statistics display how many tokens were sanitized.
 
 ---
 

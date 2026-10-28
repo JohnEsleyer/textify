@@ -199,37 +199,83 @@ func runStart(args []string, signaturesOnly, diffOnly bool) {
 }
 
 func runLoad(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Error: Missing request file.")
-		fmt.Println("Usage: textify load <request.txt> [flags]")
-		os.Exit(1)
-	}
-
-	requestFile := args[0]
 	fs := flag.NewFlagSet("load", flag.ExitOnError)
 	formatFlag := fs.String("format", "", "Output format: raw, markdown, or xml")
 	clipFlag := fs.Bool("clip", false, "Copy output directly to clipboard")
 	clipShortFlag := fs.Bool("c", false, "Copy output directly to clipboard (shorthand)")
+	clipInFlag := fs.Bool("clip-in", false, "Read request directly from system clipboard")
+	clipInShortFlag := fs.Bool("ci", false, "Read request directly from system clipboard (shorthand)")
 	stdoutFlag := fs.Bool("stdout", false, "Stream output directly to standard output")
 	noRedactFlag := fs.Bool("no-redact", false, "Disable sensitive secret scrubbing")
 	outputFlag := fs.String("o", "", "Override output file name")
 
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
 
 	copyToClip := *clipFlag || *clipShortFlag
+	fromClip := *clipInFlag || *clipInShortFlag
 
-	reqData, err := os.ReadFile(requestFile)
-	if err != nil {
-		fmt.Printf("Error reading request file %s: %v\n", requestFile, err)
-		os.Exit(1)
+	var reqData []byte
+	positional := fs.Args()
+
+	if fromClip {
+		clipText, err := fileutil.ReadFromClipboard()
+		if err != nil {
+			fmt.Printf("Error reading from clipboard: %v\n", err)
+			os.Exit(1)
+		}
+		reqData = []byte(clipText)
+	} else if len(positional) > 0 && positional[0] != "-" {
+		requestFile := positional[0]
+		data, err := os.ReadFile(requestFile)
+		if err != nil {
+			fmt.Printf("Error reading request file %s: %v\n", requestFile, err)
+			os.Exit(1)
+		}
+		reqData = data
+	} else if len(positional) > 0 && positional[0] == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Printf("Error reading from stdin: %v\n", err)
+			os.Exit(1)
+		}
+		reqData = data
+	} else {
+		// Auto-detection fallback
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			if data, err := io.ReadAll(os.Stdin); err == nil && len(data) > 0 {
+				reqData = data
+			}
+		}
+		if len(reqData) == 0 {
+			if data, err := os.ReadFile("request.txt"); err == nil && len(data) > 0 {
+				reqData = data
+				fmt.Println("Auto-detected request from request.txt")
+			}
+		}
+		if len(reqData) == 0 {
+			if clipText, err := fileutil.ReadFromClipboard(); err == nil {
+				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<request") || strings.Contains(clipText, "<slice") {
+					reqData = []byte(clipText)
+					fmt.Println("Auto-detected request from system clipboard")
+				}
+			}
+		}
+		if len(reqData) == 0 {
+			fmt.Println("Error: No request source provided.")
+			fmt.Println("Usage: textify load [request.txt] [flags]")
+			fmt.Println("       textify load -ci -c   (instant clipboard-to-clipboard)")
+			fmt.Println("       cat request.txt | textify load - -c")
+			os.Exit(1)
+		}
 	}
 
 	requests := scanner.ParseRequest(string(reqData))
 	if len(requests) == 0 {
-		fmt.Println("No valid file requests found in", requestFile)
-		fmt.Println("Ensure the file contains <request><file path=\"...\" /></request> or a bullet list.")
+		fmt.Println("No valid file requests found in the input.")
+		fmt.Println("Ensure the request contains <request><file path=\"...\" /></request> or bullet lists.")
 		os.Exit(1)
 	}
 
@@ -303,14 +349,22 @@ func printPrompt() {
 	fmt.Println(`Copy and paste this prompt to the LLM alongside your signatures:
 --------------------------------------------------------------------------------
 Here is the project outline and signatures with line numbers.
-Analyze them. If you need the full implementation of specific files,
-line ranges, or functions to answer my question, respond using this format:
+Analyze them. If you need full implementations of specific files,
+line ranges, keyword searches, or symbols, respond using this format:
 
 <request>
   <file path="path/to/file.ext" />
   <file path="path/to/file.ext" lines="50-120" />
+  <file path="path/to/file.ext" lines="10-25, 80-100" />
+  <file path="path/to/file.ext" lines="100:" />
+  <file path="path/to/file.ext" search="function_or_keyword" context="5" />
   <file path="path/to/file.ext" symbols="FunctionName,TypeName" />
+  <file glob="pkg/compiler/*_test.go" />
 </request>
+
+Markdown lists are also supported:
+- path/to/file.ext:50-120
+- path/to/file.ext (search: "keyword")
 
 Otherwise, proceed directly with your solution.
 --------------------------------------------------------------------------------`)
@@ -319,18 +373,19 @@ Otherwise, proceed directly with your solution.
 func printHelp() {
 	fmt.Println("Textify - Turn your codebase into AI-ready text")
 	fmt.Println("\nUsage:")
-	fmt.Println("  textify init                Scans folders and generates textify.yaml")
-	fmt.Println("  textify scan                Detects new folders and updates textify.yaml")
-	fmt.Println("  textify start [flags]       Generates output file based on configuration")
-	fmt.Println("  textify signatures [flags]  Extracts structs, types, interfaces, and function signatures")
-	fmt.Println("  textify diff [flags]        Only includes modified and untracked git files")
-	fmt.Println("  textify load <file> [flags] Extracts specific files/lines requested by the LLM")
-	fmt.Println("  textify prompt              Prints the instruction prompt to paste to the LLM")
-	fmt.Println("  textify version             Shows current version")
-	fmt.Println("\nFlags for start, signatures, diff, and load:")
-	fmt.Println("  --clip, -c                  Copy output directly to clipboard")
-	fmt.Println("  --format <raw|markdown|xml> Output format structure (default raw)")
-	fmt.Println("  --stdout                    Stream output to stdout (useful for piping)")
-	fmt.Println("  --no-tree                   Omit ASCII directory tree from the header")
-	fmt.Println("  --no-redact                 Disable automatic sensitive secret scrubbing")
+	fmt.Println("  textify init                 Scans folders and generates textify.yaml")
+	fmt.Println("  textify scan                 Detects new folders and updates textify.yaml")
+	fmt.Println("  textify start [flags]        Generates output file based on configuration")
+	fmt.Println("  textify signatures [flags]   Extracts structs, types, interfaces, and function signatures")
+	fmt.Println("  textify diff [flags]         Only includes modified and untracked git files")
+	fmt.Println("  textify load [file] [flags]  Extracts requested files, slices, searches, or symbols")
+	fmt.Println("  textify prompt               Prints the instruction prompt to paste to the LLM")
+	fmt.Println("  textify version              Shows current version")
+	fmt.Println("\nFlags for load:")
+	fmt.Println("  --clip-in, -ci               Read request directly from system clipboard")
+	fmt.Println("  --clip, -c                   Copy output slices directly to system clipboard")
+	fmt.Println("  --format <raw|markdown|xml>  Output format structure (default raw)")
+	fmt.Println("  --stdout                     Stream output to stdout (useful for piping)")
+	fmt.Println("  --no-redact                  Disable sensitive secret scrubbing")
+	fmt.Println("  -o <file>                    Override destination filename")
 }

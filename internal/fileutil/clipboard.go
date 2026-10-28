@@ -45,3 +45,32 @@ func CopyToClipboard(content string) error {
 
 	return fmt.Errorf("clipboard command not available")
 }
+
+// ReadFromClipboard reads string content from the system clipboard.
+func ReadFromClipboard() (string, error) {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbpaste")
+	case "linux":
+		if _, err := exec.LookPath("wl-paste"); err == nil {
+			cmd = exec.Command("wl-paste", "--no-newline")
+		} else if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard", "-o")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--output")
+		}
+	case "windows":
+		cmd = exec.Command("powershell", "-NoProfile", "-Command", "Get-Clipboard")
+	}
+
+	if cmd != nil {
+		out, err := cmd.Output()
+		if err == nil {
+			return string(out), nil
+		}
+	}
+
+	return "", fmt.Errorf("clipboard read command not available or failed")
+}
