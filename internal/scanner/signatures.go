@@ -7,10 +7,30 @@ import (
 	"strings"
 )
 
+// IsDocFile reports whether a file path points to a documentation file.
+func IsDocFile(filePath string) bool {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	switch ext {
+	case ".md", ".markdown", ".mdown", ".mkdn", ".rst", ".txt", ".adoc":
+		return true
+	}
+	base := strings.ToLower(filepath.Base(filePath))
+	return base == "readme" || base == "license" || base == "changelog"
+}
+
 // ExtractSignatures takes file contents and strips function/method bodies,
 // preserving structs, interfaces, types, and function signatures with their
 // original 1-based source line numbers.
+// For documentation files (e.g. .md), the full content is preserved.
 func ExtractSignatures(filePath string, content string) string {
+	if IsDocFile(filePath) {
+		lines := strings.Split(content, "\n")
+		var out strings.Builder
+		for idx, line := range lines {
+			out.WriteString(fmt.Sprintf("%5d | %s\n", idx+1, line))
+		}
+		return out.String()
+	}
 	ext := strings.ToLower(filepath.Ext(filePath))
 	return extractGenericSignatures(content, ext)
 }

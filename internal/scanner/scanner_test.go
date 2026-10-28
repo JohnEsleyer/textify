@@ -197,6 +197,55 @@ func Add(a, b int) int {
 	assertNotContains(t, output, "return a + b")
 }
 
+func TestScanSignaturesIncludesDocs(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_test_sig_docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	goCode := `package main
+
+func Add(a, b int) int {
+	return a + b
+}
+`
+	mdContent := `# Documentation
+
+This is project documentation.
+It explains how everything works.
+`
+	createFile(t, tempDir, "main.go", goCode)
+	createFile(t, tempDir, "README.md", mdContent)
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled:    true,
+				Extensions: []string{"go", "md"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	if _, err := Scan(tempDir, cfg, &buf, ScanOptions{SignaturesOnly: true, Tree: false}); err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	output := buf.String()
+
+	// main.go should have signatures stripped
+	assertContains(t, output, "\x3cfile path=\"main.go\"")
+	assertContains(t, output, "func Add(a, b int) int")
+	assertNotContains(t, output, "return a + b")
+
+	// README.md should be fully included
+	assertContains(t, output, "\x3cfile path=\"README.md\"")
+	assertContains(t, output, "# Documentation")
+	assertContains(t, output, "This is project documentation.")
+	assertContains(t, output, "It explains how everything works.")
+}
+
 func TestTreeAndMarkdownFormatting(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "scanner_test_formatting")
 	if err != nil {

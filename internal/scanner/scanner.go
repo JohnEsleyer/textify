@@ -113,7 +113,11 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 
 		modeSuffix := ""
 		if opts.SignaturesOnly {
-			modeSuffix = " (signatures)"
+			if IsDocFile(relPath) {
+				modeSuffix = " (full doc)"
+			} else {
+				modeSuffix = " (signatures)"
+			}
 		} else if rule.Compact {
 			modeSuffix = " (compacted)"
 		}
@@ -288,7 +292,9 @@ func appendFileContent(
 
 	content := string(rawBytes)
 
-	if signaturesOnly {
+	useSignatures := signaturesOnly && !IsDocFile(relPath)
+
+	if useSignatures {
 		content = ExtractSignatures(relPath, content)
 	} else if rule.Compact {
 		var sb strings.Builder
@@ -312,7 +318,7 @@ func appendFileContent(
 	totalLines := len(origLines)
 
 	lines := strings.Split(content, "\n")
-	if !signaturesOnly {
+	if !useSignatures {
 		var numbered strings.Builder
 		for idx, line := range lines {
 			numbered.WriteString(fmt.Sprintf("%5d | %s\n", idx+1, line))

@@ -120,7 +120,7 @@ Once satisfied with your config, run either:
   ```bash
   textify signatures
   ```
-  Exports types, interfaces, enums, and function signatures with exact source line numbers, stripping out function bodies.
+  Exports types, interfaces, enums, and function signatures with exact source line numbers, stripping out function bodies (documentation files like `.md` are fully included).
 
 * **Git Diff Mode (PR & Change Reviews):**
   ```bash
