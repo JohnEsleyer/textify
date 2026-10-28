@@ -52,15 +52,22 @@ type DirRule struct {
 
 // Config represents the top-level structure of the textify.yaml file.
 type Config struct {
-	OutputFile string             `yaml:"output_file"`
-	Dirs       map[string]DirRule `yaml:"dirs"`
+	OutputFile  string             `yaml:"output_file"`
+	Format      string             `yaml:"format,omitempty"`        // "raw" (default), "markdown", "xml"
+	Tree        *bool              `yaml:"tree,omitempty"`          // prepend directory tree (default true)
+	MaxFileSize int64              `yaml:"max_file_size,omitempty"` // file size limit in bytes (default 500KB)
+	Dirs        map[string]DirRule `yaml:"dirs"`
 }
 
 // DefaultConfig returns a barebones config.
 func DefaultConfig() Config {
+	treeDefault := true
 	return Config{
-		OutputFile: "codebase.txt",
-		Dirs:       make(map[string]DirRule),
+		OutputFile:  "codebase.txt",
+		Format:      "raw",
+		Tree:        &treeDefault,
+		MaxFileSize: 500 * 1024, // 500 KB
+		Dirs:        make(map[string]DirRule),
 	}
 }
 

@@ -12,33 +12,137 @@ import (
 	"github.com/JohnEsleyer/textify/internal/fileutil"
 )
 
-// Scan initiates the directory walk based on the provided configuration.
-func Scan(rootPath string, cfg *config.Config, writer io.Writer, signaturesOnly bool) error {
+// ScanOptions controls advanced scanning, formatting, and filtering behaviors.
+type ScanOptions struct {
+	SignaturesOnly bool
+	DiffOnly       bool
+	Format         string
+	MaxFileSize    int64
+	RedactSecrets  bool
+	Tree           bool
+	Stdout         bool
+}
+
+// ScanResult contains metadata and statistics about the completed scan.
+type ScanResult struct {
+	FilesCount      int
+	TotalBytes      int64
+	ApproxTokens    int
+	RedactedSecrets int
+}
+
+// Scan initiates the directory walk based on the provided configuration and options.
+func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOptions) (*ScanResult, error) {
 	chain := config.NewGitIgnoreChain(rootPath)
 	bufWriter := bufio.NewWriter(writer)
 	defer bufWriter.Flush()
 
-	// Initial rule (Root ".")
+	// 1. Initial rule (Root ".")
 	rootRule, ok := cfg.Dirs["."]
 	if !ok {
-		// If root is missing from config, default to enabled but no extensions
 		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
 	}
 
-	return walk(rootPath, rootPath, cfg.Dirs, rootRule, chain, bufWriter, signaturesOnly)
+	// 2. Resolve diff filtering if requested
+	var changedFiles map[string]bool
+	if opts.DiffOnly {
+		var err error
+		changedFiles, err = GetGitChangedFiles(rootPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get git diff status: %w", err)
+		}
+	}
+
+	// 3. Collect matching files first
+	var matchedFiles []string
+	var walkErr error
+
+	walkErr = collectFiles(rootPath, rootPath, cfg, rootRule, chain, changedFiles, &matchedFiles)
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	// 4. Prepend Tree if enabled
+	showTree := true
+	if cfg.Tree != nil {
+		showTree = *cfg.Tree
+	}
+	if opts.Tree {
+		showTree = true
+	}
+
+	if showTree && len(matchedFiles) > 0 {
+		treeStr := GenerateTree(matchedFiles)
+		fmt.Fprint(bufWriter, treeStr)
+		fmt.Fprintln(bufWriter, strings.Repeat("=", 60)+"\n")
+	}
+
+	// Format selection: opts override config, defaults to raw
+	format := "raw"
+	if cfg.Format != "" {
+		format = cfg.Format
+	}
+	if opts.Format != "" {
+		format = opts.Format
+	}
+
+	maxSize := cfg.MaxFileSize
+	if maxSize <= 0 {
+		maxSize = 500 * 1024
+	}
+	if opts.MaxFileSize > 0 {
+		maxSize = opts.MaxFileSize
+	}
+
+	result := &ScanResult{}
+
+	// 5. Render file contents
+	for _, relPath := range matchedFiles {
+		absPath := filepath.Join(rootPath, filepath.FromSlash(relPath))
+
+		// Check for specific directory rule to observe 'compact'
+		dirPath := filepath.Dir(relPath)
+		rule := rootRule
+		if r, exists := cfg.Dirs[dirPath]; exists {
+			rule = r
+		}
+
+		addedBytes, redacted, err := appendFileContent(absPath, relPath, rule, bufWriter, opts.SignaturesOnly, format, maxSize, opts.RedactSecrets)
+		if err != nil {
+			continue
+		}
+
+		result.FilesCount++
+		result.TotalBytes += addedBytes
+		result.RedactedSecrets += redacted
+
+		modeSuffix := ""
+		if opts.SignaturesOnly {
+			modeSuffix = " (signatures)"
+		} else if rule.Compact {
+			modeSuffix = " (compacted)"
+		}
+		if !opts.Stdout {
+			fmt.Printf("Added: %s%s\n", relPath, modeSuffix)
+		}
+	}
+
+	// Token estimation: ~4 chars per token
+	result.ApproxTokens = int(result.TotalBytes / 4)
+
+	return result, nil
 }
 
-func walk(
+func collectFiles(
 	fullPath string,
 	rootPath string,
-	dirRules map[string]config.DirRule,
+	cfg *config.Config,
 	currentRule config.DirRule,
 	ignoreChain config.GitIgnoreChain,
-	writer *bufio.Writer,
-	signaturesOnly bool,
+	changedFiles map[string]bool,
+	matchedFiles *[]string,
 ) error {
 
-	// Check if the directory we are currently IN has a specific rule
 	relDir, _ := filepath.Rel(rootPath, fullPath)
 	if relDir == "." {
 		relDir = "."
@@ -46,14 +150,12 @@ func walk(
 		relDir = filepath.ToSlash(relDir)
 	}
 
-	if specificRule, exists := dirRules[relDir]; exists {
+	if specificRule, exists := cfg.Dirs[relDir]; exists {
 		currentRule = specificRule
 	}
 
-	// 1. CHECK ENABLED STATUS
-	// If the directory is explicitly disabled in config, stop everything here.
 	if !currentRule.Enabled {
-		return nil // Skip this directory and its children
+		return nil
 	}
 
 	entries, err := os.ReadDir(fullPath)
@@ -67,83 +169,87 @@ func walk(
 		relEntryPath = filepath.ToSlash(relEntryPath)
 		ext := strings.TrimPrefix(filepath.Ext(entry.Name()), ".")
 
-		// -----------------------------
-		// 1. SYSTEM EXCLUDES (Hardcoded)
-		// -----------------------------
-		if shouldAlwaysExclude(entry.Name()) {
+		// System exclusions (including dynamic OutputFile name)
+		if shouldAlwaysExclude(entry.Name(), cfg.OutputFile) {
 			continue
 		}
 
-		// -----------------------------
-		// 2. USER EXCLUDES (Specific Files/Patterns)
-		// Priority: High. If excluded here, it is skipped regardless of include rules.
-		// -----------------------------
+		// Exclude pattern rule
 		if checkPatternMatch(entry.Name(), relEntryPath, currentRule.Exclude) {
 			continue
 		}
 
-		// -----------------------------
-		// 3. FORCE INCLUDE (Specific Files/Patterns)
-		// Priority: Overrides .gitignore and extension rules
-		// -----------------------------
 		isForced := checkPatternMatch(entry.Name(), relEntryPath, currentRule.Include)
 
 		if entry.IsDir() {
-			// Check if this specific SUBDIRECTORY has a rule that disables it
-			if subRule, ok := dirRules[relEntryPath]; ok {
-				if !subRule.Enabled {
-					continue
-				}
-			}
+			isIgnored := ignoreChain.Match(entryPath, true)
+			explicitRule, hasExplicitRule := cfg.Dirs[relEntryPath]
 
-			// If not forced, respect gitignore for directories
-			if !isForced && ignoreChain.Match(entryPath, true) {
+			// If explicitly disabled in config, always skip
+			if hasExplicitRule && !explicitRule.Enabled {
 				continue
 			}
 
-			subChain := ignoreChain.AddIfExists(entryPath)
-			if err := walk(entryPath, rootPath, dirRules, currentRule, subChain, writer, signaturesOnly); err != nil {
+			// If explicitly enabled in config, it takes precedence over .gitignore
+			isExplicitlyEnabled := hasExplicitRule && explicitRule.Enabled
+
+			// If gitignored and not forced and not explicitly enabled, skip
+			if isIgnored && !isForced && !isExplicitlyEnabled {
+				continue
+			}
+
+			var subChain config.GitIgnoreChain
+			if isIgnored && isExplicitlyEnabled {
+				// Parent gitignore ignored this directory, but user explicitly enabled it in config.
+				// Reset ignore chain to this directory so the parent directory's ignore rule
+				// does not suppress files inside this folder.
+				subChain = config.NewGitIgnoreChain(entryPath)
+			} else {
+				subChain = ignoreChain.AddIfExists(entryPath)
+			}
+
+			if err := collectFiles(entryPath, rootPath, cfg, currentRule, subChain, changedFiles, matchedFiles); err != nil {
 				return err
 			}
 			continue
 		}
 
-		// -----------------------------
-		// FILE PROCESSING LOGIC
-		// -----------------------------
-
-		// 4. GITIGNORE CHECK
-		// If not forced, check if ignored by git
+		// Gitignore check
 		if !isForced && ignoreChain.Match(entryPath, false) {
 			continue
 		}
 
-		// 5. EXTENSION EXCLUDES (Blocklist)
+		// Git diff filter check
+		if changedFiles != nil && !isForced {
+			if !changedFiles[relEntryPath] {
+				continue
+			}
+		}
+
+		// Extension excludes
 		if !isForced && len(currentRule.ExcludeExtensions) > 0 {
 			if contains(currentRule.ExcludeExtensions, ext) {
 				continue
 			}
 		}
 
-		// 6. EXTENSION INCLUDES (Allowlist)
-		// If Extensions list is provided, file MUST match one of them (unless forced)
+		// Extension includes
 		if !isForced && len(currentRule.Extensions) > 0 {
 			if !contains(currentRule.Extensions, ext) {
 				continue
 			}
 		}
 
-		// Write content
-		if err := appendFileContent(entryPath, relEntryPath, currentRule, writer, signaturesOnly); err != nil {
-			continue
-		}
+		*matchedFiles = append(*matchedFiles, relEntryPath)
 	}
+
 	return nil
 }
 
-// shouldAlwaysExclude handles hardcoded exclusions for tool integrity.
-func shouldAlwaysExclude(name string) bool {
-	return name == ".git" || name == "textify.yaml" || name == "codebase.txt"
+// shouldAlwaysExclude handles hardcoded exclusions and dynamic output file.
+func shouldAlwaysExclude(name, outputFile string) bool {
+	outName := filepath.Base(outputFile)
+	return name == ".git" || name == "textify.yaml" || name == outName
 }
 
 // checkPatternMatch checks if the file matches any of the glob patterns.
@@ -174,88 +280,93 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// appendFileContent writes the file header and content to the buffer.
-func appendFileContent(absPath, relPath string, rule config.DirRule, writer *bufio.Writer, signaturesOnly bool) error {
-	// Check for binary content
+// appendFileContent writes the formatted file entry to the buffer.
+func appendFileContent(
+	absPath, relPath string,
+	rule config.DirRule,
+	writer *bufio.Writer,
+	signaturesOnly bool,
+	format string,
+	maxSize int64,
+	redactSecrets bool,
+) (int64, int, error) {
+	// Skip binary files
 	isBin, err := fileutil.IsBinary(absPath)
 	if err != nil || isBin {
-		return nil // Skip binaries silently
+		return 0, 0, nil
 	}
 
-	file, err := os.Open(absPath)
+	// Enforce file size limits
+	info, err := os.Stat(absPath)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
-	defer file.Close()
+	if info.Size() > maxSize {
+		return 0, 0, nil
+	}
 
-	separator := strings.Repeat("-", 50)
-	fmt.Fprintf(writer, "%s\n", separator)
-	fmt.Fprintf(writer, "FILE: %s\n", relPath)
-	fmt.Fprintf(writer, "%s\n\n", separator)
+	rawBytes, err := os.ReadFile(absPath)
+	if err != nil {
+		return 0, 0, err
+	}
 
-	if signaturesOnly || rule.Compact {
-		scanner := bufio.NewScanner(file)
-		inBody := false
-		braceCount := 0
+	// Detect and skip minified files (e.g. bundle.js, single line with > 2000 chars)
+	if isMinified(rawBytes) {
+		return 0, 0, nil
+	}
 
-		for scanner.Scan() {
-			line := scanner.Text()
-			trimmed := strings.TrimSpace(line)
+	content := string(rawBytes)
 
-			if signaturesOnly {
-				// Heuristic filter for structs, enums, interfaces, classes, and function signatures
-				isSigStart := strings.HasPrefix(trimmed, "func ") ||
-					strings.HasPrefix(trimmed, "fn ") ||
-					strings.HasPrefix(trimmed, "type ") ||
-					strings.HasPrefix(trimmed, "struct ") ||
-					strings.HasPrefix(trimmed, "enum ") ||
-					strings.HasPrefix(trimmed, "class ") ||
-					strings.HasPrefix(trimmed, "interface ") ||
-					strings.HasPrefix(trimmed, "trait ") ||
-					strings.Contains(trimmed, "func(") ||
-					strings.Contains(trimmed, "interface{") ||
-					strings.Contains(trimmed, "struct{")
-
-				if isSigStart {
-					inBody = true
-					braceCount = 0
-				}
-
-				if inBody {
-					fmt.Fprintln(writer, line)
-					for _, ch := range trimmed {
-						if ch == '{' {
-							braceCount++
-						} else if ch == '}' {
-							braceCount--
-						}
-					}
-					if braceCount <= 0 && strings.Contains(trimmed, "}") {
-						inBody = false
-						fmt.Fprintln(writer, "")
-					}
-				}
-			} else {
-				if trimmed != "" {
-					fmt.Fprintln(writer, line)
-				}
+	// Process Signatures mode
+	if signaturesOnly {
+		content = ExtractSignatures(relPath, content)
+	} else if rule.Compact {
+		// Strip blank lines and trailing spaces
+		var sb strings.Builder
+		sc := bufio.NewScanner(strings.NewReader(content))
+		for sc.Scan() {
+			t := strings.TrimSpace(sc.Text())
+			if t != "" {
+				sb.WriteString(t)
+				sb.WriteString("\n")
 			}
 		}
-	} else {
-		if _, err = io.Copy(writer, file); err != nil {
-			return err
+		content = sb.String()
+	}
+
+	redactedCount := 0
+	if redactSecrets {
+		content, redactedCount = fileutil.RedactSecrets(content)
+	}
+
+	// Render formatted content
+	var formatted strings.Builder
+	switch strings.ToLower(format) {
+	case "markdown", "md":
+		ext := strings.TrimPrefix(filepath.Ext(relPath), ".")
+		formatted.WriteString(fmt.Sprintf("### File: `%s`\n\n```%s\n%s\n```\n\n", relPath, ext, strings.TrimRight(content, "\n")))
+	case "xml":
+		formatted.WriteString(fmt.Sprintf("<file path=\"%s\">\n%s\n</file>\n\n", relPath, strings.TrimRight(content, "\n")))
+	default: // "raw"
+		separator := strings.Repeat("-", 50)
+		formatted.WriteString(fmt.Sprintf("%s\nFILE: %s\n%s\n\n%s\n\n", separator, relPath, separator, strings.TrimRight(content, "\n")))
+	}
+
+	n, writeErr := writer.WriteString(formatted.String())
+	return int64(n), redactedCount, writeErr
+}
+
+func isMinified(content []byte) bool {
+	lineLen := 0
+	for _, b := range content {
+		if b == '\n' {
+			if lineLen > 2000 {
+				return true
+			}
+			lineLen = 0
+		} else {
+			lineLen++
 		}
 	}
-
-	fmt.Fprintf(writer, "\n\n")
-
-	modeSuffix := ""
-	if signaturesOnly {
-		modeSuffix = " (signatures only)"
-	} else if rule.Compact {
-		modeSuffix = " (compacted)"
-	}
-
-	fmt.Printf("Added: %s%s\n", relPath, modeSuffix)
-	return nil
+	return lineLen > 2000
 }

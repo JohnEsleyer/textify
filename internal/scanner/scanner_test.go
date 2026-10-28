@@ -57,7 +57,7 @@ func TestScanWithGranularRules(t *testing.T) {
 
 	// 3. Run Scan
 	var buf bytes.Buffer
-	err = Scan(tempDir, cfg, &buf, false)
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false})
 	if err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestMixedDirectoryRules(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	Scan(tempDir, cfg, &buf, false)
+	Scan(tempDir, cfg, &buf, ScanOptions{Tree: false})
 	output := buf.String()
 
 	assertContains(t, output, "FILE: backend/main.go")
@@ -157,7 +157,7 @@ func TestSubfolderGitignoreAndDisabledSubdir(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := Scan(tempDir, cfg, &buf, false); err != nil {
+	if _, err := Scan(tempDir, cfg, &buf, ScanOptions{Tree: false}); err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 	output := buf.String()
@@ -204,14 +204,93 @@ func Add(a, b int) int {
 	}
 
 	var buf bytes.Buffer
-	if err := Scan(tempDir, cfg, &buf, true); err != nil {
+	if _, err := Scan(tempDir, cfg, &buf, ScanOptions{SignaturesOnly: true, Tree: false}); err != nil {
 		t.Fatalf("Scan failed: %v", err)
 	}
 	output := buf.String()
 
 	assertContains(t, output, "FILE: main.go")
 	assertContains(t, output, "type User struct {")
-	assertContains(t, output, "func Add(a, b int) int {")
+	assertContains(t, output, "func Add(a, b int) int")
+	// Ensure the body statements were stripped out
+	assertNotContains(t, output, "return a + b")
+}
+
+func TestTreeAndMarkdownFormatting(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_test_formatting")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	createFile(t, tempDir, "main.go", "package main")
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled:    true,
+				Extensions: []string{"go"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Format: "markdown", Tree: true})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	output := buf.String()
+
+	assertContains(t, output, "PROJECT STRUCTURE:")
+	assertContains(t, output, "### File: `main.go`")
+	assertContains(t, output, "```go")
+}
+
+func TestGitignoredFolderExplicitlyEnabled(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_test_gitignored_enabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create a folder that is in .gitignore
+	os.MkdirAll(filepath.Join(tempDir, "local_docs"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "ignored_folder"), 0755)
+
+	createFile(t, tempDir, "local_docs/notes.txt", "Private local project documentation")
+	createFile(t, tempDir, "ignored_folder/skip.txt", "Should be ignored")
+	createFile(t, tempDir, ".gitignore", "local_docs/\nignored_folder/\n")
+
+	// In textify.yaml, explicitly enable local_docs
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled: true,
+			},
+			"local_docs": {
+				Enabled: true,
+			},
+			"ignored_folder": {
+				Enabled: false,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	output := buf.String()
+
+	// local_docs should be included because it is enabled in config
+	assertContains(t, output, "FILE: local_docs/notes.txt")
+	assertContains(t, output, "Private local project documentation")
+
+	// ignored_folder should be excluded
+	assertNotContains(t, output, "FILE: ignored_folder/skip.txt")
 }
 
 func createFile(t *testing.T, dir, name, content string) {

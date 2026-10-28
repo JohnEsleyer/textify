@@ -111,6 +111,20 @@ Once satisfied with your config, run either:
   ```
   This strips out function implementations and keeps only structs, types, enums, and function signatures to drastically reduce token usage for LLM context windows.
 
+* **Git Diff Mode (PR & Change Reviews):**
+  ```bash
+  textify diff
+  ```
+  Exports only the files that have been modified or staged in your Git repository.
+
+### Advanced Flags
+You can append flags to `start`, `signatures`, and `diff`:
+* `--clip` or `-c`: Copies output directly to your system clipboard.
+* `--format <raw|markdown|xml>`: Structured outputs tailored for Claude (XML) or ChatGPT (Markdown).
+* `--stdout`: Streams the output to stdout for Unix piping (e.g. `textify start --stdout | pbcopy`).
+* `--no-tree`: Disables prepending the ASCII directory structure map.
+* `--no-redact`: Bypasses the automated secret scrubber.
+
 ---
 
 ## ⚙️ Configuration Guide
