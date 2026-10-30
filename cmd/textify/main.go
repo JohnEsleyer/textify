@@ -567,6 +567,8 @@ func runPatch(args []string) {
 	dryRunShortFlag := fs.Bool("n", false, "Preview changes without modifying files on disk (shorthand)")
 	clipInFlag := fs.Bool("clip-in", false, "Read patch directly from system clipboard")
 	clipInShortFlag := fs.Bool("ci", false, "Read patch directly from system clipboard (shorthand)")
+	fixFlag := fs.Bool("fix", false, "Auto-fix near-matching search targets and prompt confirmation")
+	fixShortFlag := fs.Bool("f", false, "Auto-fix near-matching search targets and prompt confirmation (shorthand)")
 
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
@@ -574,6 +576,7 @@ func runPatch(args []string) {
 
 	dryRun := *dryRunFlag || *dryRunShortFlag
 	fromClip := *clipInFlag || *clipInShortFlag
+	autoFix := *fixFlag || *fixShortFlag
 
 	var patchData []byte
 	positional := fs.Args()
@@ -618,7 +621,7 @@ func runPatch(args []string) {
 		}
 		if len(patchData) == 0 {
 			if clipText, err := fileutil.ReadFromClipboard(); err == nil {
-				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<replace") || strings.Contains(clipText, "<delete") {
+				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<replace") || strings.Contains(clipText, "<ast-replace") || strings.Contains(clipText, "<delete") {
 					patchData = []byte(clipText)
 					fmt.Println("Auto-detected patch from system clipboard")
 				}
@@ -626,7 +629,7 @@ func runPatch(args []string) {
 		}
 		if len(patchData) == 0 {
 			fmt.Println("Error: No patch source provided.")
-			fmt.Println("Usage: textify patch [patch-file.txt] [--dry-run]")
+			fmt.Println("Usage: textify patch [patch-file.txt] [--dry-run] [--fix]")
 			fmt.Println("       textify patch -ci              (apply patch directly from clipboard)")
 			fmt.Println("       cat changes.txt | textify patch -")
 			os.Exit(1)
@@ -640,7 +643,10 @@ func runPatch(args []string) {
 	}
 
 	result, err := patcher.Apply(cwd, string(patchData), patcher.PatchOptions{
-		DryRun: dryRun,
+		DryRun:  dryRun,
+		AutoFix: autoFix,
+		Stdin:   os.Stdin,
+		Stdout:  os.Stdout,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Patch validation failed. Zero files were modified.\n")
@@ -721,13 +727,36 @@ When providing solutions or code edits, output patch directives using <file>, <r
 ... full content ...
 </file>
 
-2. Targeted region update (PREFER symbol or <search> with ...):
+2. Structural AST Case replacement (Zero text fragility for switch cases):
+<replace path="path/to/file.go" fn="inferExpr" case="*MemberExpr">
+<with>
+    case *MemberExpr:
+        return handleMember(e)
+</with>
+</replace>
+
+3. Scope-bounded targeted update (Restricts search window to a function):
+<replace path="path/to/file.go" within="inferExpr">
+<search>
+    if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+        ...
+    }
+</search>
+<with>
+    if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+        handleEnumV2(variants)
+    }
+</with>
+</replace>
+
+4. AST-Exact Symbol Replacement:
 <replace path="path/to/file.ext" symbol="functionOrStructName">
 <with>
 ... replacement declaration ...
 </with>
 </replace>
 
+5. Search Block with Wildcards / Ellipsis:
 <replace path="path/to/file.ext">
 <search>
 prefix code
@@ -745,7 +774,7 @@ suffix code
 </with>
 </replace>
 
-3. Anchor insertions or pattern ranges:
+6. Anchor insertions or pattern ranges:
 <replace path="path/to/file.ext" after="anchor line">
 <with>
 new code
@@ -758,13 +787,14 @@ replacement block
 </with>
 </replace>
 
-4. Delete a file:
+7. Delete a file:
 <delete path="path/to/obsolete.ext" />
 
 CRITICAL RULES FOR PATCH DIRECTIVES:
 - NEVER put '<' or '>' inside XML attributes (use <search> block instead).
-- Prefer symbol="..." over multiple partial replacements in the same function.
-- Every <replace> MUST have a target (symbol, search block, from/to, after, before, or lines).
+- Prefer fn="..." case="..." for switch cases (auto-formats with gofmt).
+- Use within="..." to scope replacements to a single function to avoid duplicate-line errors.
+- Every <replace> MUST have a target (case, within, symbol, search block, from/to, after, before, or lines).
 - Use '...' wildcards in <search> blocks to match surrounding unchanged boilerplate.
 --------------------------------------------------------------------------------`)
 }
@@ -787,6 +817,7 @@ func printHelp() {
 	fmt.Println("\nFlags for patch:")
 	fmt.Println("  --dry-run, -n                Validate and preview changes without modifying files")
 	fmt.Println("  --clip-in, -ci               Read patch directly from system clipboard")
+	fmt.Println("  --fix, -f                    Auto-fix near-matching search targets and interactive prompt")
 	fmt.Println("\nFlags for def/trace:")
 	fmt.Println("  --lang <go,ts,all>           Languages to index (default all)")
 	fmt.Println("  --depth <num>                Maximum trace depth (default 5)")

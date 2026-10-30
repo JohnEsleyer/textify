@@ -15,7 +15,9 @@ Instead of dumping bloated folders into chat windows or manually editing files, 
 - 📉 **Save 80–90% of Tokens:** Export lightweight type and function signatures first. Then, load only the exact files, sections, or search terms requested by the AI.
 - 🎯 **Stop Guessing Line Numbers:** AI models can request code using keywords (`find="..."`), block delimiters (`from="..." to="..."`), function/struct names (`symbol="..."`), or project-wide keyword search (`<grep pattern="..." />`).
 - 🩹 **Atomic Two-Pass Patch Application (`textify patch`):** Safely apply multi-file modifications from LLMs. All changes are validated in an in-memory Virtual File System (VFS) first — if any search target fails, **zero files on disk are touched**.
-- 🧩 **5-Tier Fuzzy Search Matching & Ellipsis (`...`):** Match code regardless of CRLF vs LF, trailing whitespace, or indentation shifts, and use `...` to preserve boilerplate without reproducing it.
+- 🧩 **Structural AST Case Replacement (`fn="..." case="..."`):** Deterministically replaces switch-case clauses using AST nodes without guessing tabs, spaces, or indentation, automatically reformatting with standard `gofmt`.
+- 🔍 **Surgical Scope Bounding (`within="..."`):** Restricts `<search>` blocks strictly inside a named function or method, eliminating ambiguous duplicate matches elsewhere in the file.
+- 🩹 **Token-Normalized Fuzzy Tolerance & Auto-Healing (`--fix`):** Matches code even if minor variable names or indentations drift (with similarity confidence scoring), and prints unified diffs on search failures.
 - ⚡ **Instant Search CLI (`textify grep`):** Locate any identifier across the entire project with surrounding context lines and copy directly to your clipboard.
 - 📋 **1-Click Clipboard Workflow:** Pipe requests straight from clipboard to clipboard with `textify load -ci -c` and apply with `textify patch -ci`. Zero file juggling required.
 - 🛡️ **Automated Secret Redaction:** Scrub API keys, private keys, AWS tokens, and GitHub PATs before code ever leaves your machine.
@@ -87,7 +89,7 @@ When the AI provides its solution:
    ```bash
    textify patch -ci
    ```
-   *(Or preview first with `textify patch -ci --dry-run`)*
+   *(Or auto-fix near matches with `textify patch -ci --fix`)*
 
 ---
 
@@ -95,20 +97,35 @@ When the AI provides its solution:
 
 Textify's patch engine supports surgical, robust directives. Conversational text and markdown wrappers outside the tags are automatically ignored.
 
-### 1. Create or Overwrite a File: `<file>`
+### 1. Structural AST Case Replacement (`fn="..." case="..."`)
+Replaces switch-case clauses directly in the syntax tree without whitespace or indentation guessing:
 ```xml
-<file path="cmd/app/main.go">
-package main
-
-import "fmt"
-
-func main() {
-    fmt.Println("Hello, World!")
-}
-</file>
+<replace path="pkg/compiler/typechecker_expr.go" fn="inferExpr" case="*MemberExpr">
+<with>
+    case *MemberExpr:
+        return handleMember(ctx, e)
+</with>
+</replace>
 ```
 
-### 2. AST-Exact Symbol Replacement (`symbol="..."`)
+### 2. Surgical Function Scope Bounding (`within="..."`)
+Restricts the `<search>` block strictly to the body of a specific function or method, preventing mismatches in files with repeated patterns:
+```xml
+<replace path="pkg/compiler/typechecker_expr.go" within="Typechecker.inferExpr">
+<search>
+    if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+        ...
+    }
+</search>
+<with>
+    if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+        handleEnumV2(variants)
+    }
+</with>
+</replace>
+```
+
+### 3. AST-Exact Symbol Replacement (`symbol="..."`)
 ```xml
 <replace path="pkg/compiler/codegen.go" symbol="inferExpr">
 <with>
@@ -128,7 +145,7 @@ func (s *Server) Start() error {
 </replace>
 ```
 
-### 3. Search Block with Wildcards / Ellipsis (`...`)
+### 4. Search Block with Wildcards / Ellipsis (`...`)
 ```xml
 <replace path="pkg/config/config.go">
 <search>
@@ -149,7 +166,7 @@ type Config struct {
 </replace>
 ```
 
-### 4. Anchor Insertions (`after="..."` or `before="..."`)
+### 5. Anchor Insertions (`after="..."` or `before="..."`)
 ```xml
 <replace path="pkg/api/server.go" after="router := gin.Default()">
 <with>
@@ -158,7 +175,7 @@ type Config struct {
 </replace>
 ```
 
-### 5. Block Replacement (`from="..." to="..."`)
+### 6. Block Replacement (`from="..." to="..."`)
 ```xml
 <replace path="pkg/compiler/typechecker.go" from="case *PromoteExpr:" to="case *">
 <with>
@@ -170,7 +187,20 @@ case *
 </replace>
 ```
 
-### 6. Delete a File: `<delete />`
+### 7. Create or Overwrite a File: `<file>`
+```xml
+<file path="cmd/app/main.go">
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, World!")
+}
+</file>
+```
+
+### 8. Delete a File: `<delete />`
 ```xml
 <delete path="path/to/obsolete_file.go" />
 ```
@@ -201,6 +231,7 @@ case *
 | :--- | :---: | :---: | :--- |
 | `--dry-run` | `-n` | `false` | Validate and preview changes without modifying files on disk. |
 | `--clip-in` | `-ci` | `false` | Read patch directly from system clipboard. |
+| `--fix` | `-f` | `false` | Interactive or auto-fix mode for near-matching search targets. |
 
 ---
 

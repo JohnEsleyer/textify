@@ -1,6 +1,7 @@
 package patcher
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,5 +288,238 @@ func TestSanitizeLineNumbersAndCodeFences(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "package main") || !strings.Contains(string(data), "func Clean() {}") {
 		t.Errorf("clean code missing:\n%s", string(data))
+	}
+}
+
+func TestReplaceASTCaseGo(t *testing.T) {
+	dir := t.TempDir()
+	source := `package compiler
+
+func inferExpr(expr interface{}) string {
+	switch e := expr.(type) {
+	case *PromoteExpr:
+		return "promote"
+	case *MemberExpr:
+		return "old member logic"
+	default:
+		return "unknown"
+	}
+}
+`
+	os.WriteFile(filepath.Join(dir, "typechecker.go"), []byte(source), 0644)
+
+	patch := `
+<replace path="typechecker.go" fn="inferExpr" case="*MemberExpr">
+<with>
+	case *MemberExpr:
+		return "new AST replaced logic"
+</with>
+</replace>
+`
+	res, err := Apply(dir, patch, PatchOptions{})
+	if err != nil {
+		t.Fatalf("AST case replacement failed: %v", err)
+	}
+	if len(res.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(res.Changes))
+	}
+
+	updated, _ := os.ReadFile(filepath.Join(dir, "typechecker.go"))
+	out := string(updated)
+
+	if !strings.Contains(out, "new AST replaced logic") {
+		t.Errorf("AST case replacement missing new logic:\n%s", out)
+	}
+	if strings.Contains(out, "old member logic") {
+		t.Errorf("Old case logic was not removed:\n%s", out)
+	}
+	if !strings.Contains(out, "case *PromoteExpr:") || !strings.Contains(out, "default:") {
+		t.Errorf("Unrelated cases were corrupted:\n%s", out)
+	}
+}
+
+func TestReplaceWithinScope(t *testing.T) {
+	dir := t.TempDir()
+	source := `package main
+
+func funcA() {
+	if x > 0 {
+		doSomething()
+	}
+}
+
+func funcB() {
+	if x > 0 {
+		doSomething()
+	}
+}
+`
+	os.WriteFile(filepath.Join(dir, "main.go"), []byte(source), 0644)
+
+	patch := `
+<replace path="main.go" within="funcB">
+<search>
+	if x > 0 {
+		doSomething()
+	}
+</search>
+<with>
+	if x > 0 {
+		doSomethingB()
+	}
+</with>
+</replace>
+`
+	_, err := Apply(dir, patch, PatchOptions{})
+	if err != nil {
+		t.Fatalf("Scoped within replacement failed: %v", err)
+	}
+
+	updated, _ := os.ReadFile(filepath.Join(dir, "main.go"))
+	out := string(updated)
+
+	// funcA must remain untouched
+	if !strings.Contains(out, "func funcA() {\n\tif x > 0 {\n\t\tdoSomething()\n\t}\n}") {
+		t.Errorf("funcA was incorrectly modified:\n%s", out)
+	}
+
+	// funcB must have the update
+	if !strings.Contains(out, "func funcB() {\n\tif x > 0 {\n\t\tdoSomethingB()\n\t}\n}") {
+		t.Errorf("funcB was not updated:\n%s", out)
+	}
+}
+
+func TestTokenNormalizedFuzzyAutoHealing(t *testing.T) {
+	dir := t.TempDir()
+	source := `package main
+
+func process() {
+	start()
+	if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+		handleEnum(variants)
+	}
+	finish()
+}
+`
+	os.WriteFile(filepath.Join(dir, "process.go"), []byte(source), 0644)
+
+	// Notice the LLM wrote "variants, ok" instead of "variants, isEnum"
+	patch := `
+<replace path="process.go">
+<search>
+	start()
+	if variants, ok := tc.Global.Enums[id.Name]; ok {
+		handleEnum(variants)
+	}
+	finish()
+</search>
+<with>
+	start()
+	if variants, isEnum := tc.Global.Enums[id.Name]; isEnum {
+		handleEnumV2(variants)
+	}
+	finish()
+</with>
+</replace>
+`
+	// Should auto-heal cleanly
+	_, err := Apply(dir, patch, PatchOptions{AutoFix: true})
+	if err != nil {
+		t.Fatalf("Fuzzy auto-healing failed: %v", err)
+	}
+
+	updated, _ := os.ReadFile(filepath.Join(dir, "process.go"))
+	if !strings.Contains(string(updated), "handleEnumV2(variants)") {
+		t.Errorf("Auto-healed replacement not applied:\n%s", string(updated))
+	}
+}
+
+func TestUnifiedDiffOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	source := `package main
+
+func check() {
+	var a = 1
+	var b = 2
+	var c = 3
+}
+`
+	os.WriteFile(filepath.Join(dir, "check.go"), []byte(source), 0644)
+
+	patch := `
+<replace path="check.go">
+<search>
+	var a = 1
+	var b = 999
+	var c = 3
+</search>
+<with>
+	var a = 10
+</with>
+</replace>
+`
+	_, err := Apply(dir, patch, PatchOptions{AutoFix: false})
+	if err == nil {
+		t.Fatal("expected failure due to mismatch")
+	}
+
+	errStr := err.Error()
+	if !strings.Contains(errStr, "Closest match found near line") {
+		t.Errorf("error missing near line hint: %s", errStr)
+	}
+	if !strings.Contains(errStr, "--- Search Block") || !strings.Contains(errStr, "+++ Buffer near Line") {
+		t.Errorf("error missing unified diff headers: %s", errStr)
+	}
+	if !strings.Contains(errStr, "-   \tvar b = 999") || !strings.Contains(errStr, "+   \tvar b = 2") {
+		t.Errorf("error missing character diff lines: %s", errStr)
+	}
+}
+
+func TestInteractiveAutoFixPrompt(t *testing.T) {
+	dir := t.TempDir()
+	source := `package main
+
+func run() {
+	count := getCount()
+	if count > 0 {
+		execute()
+	}
+}
+`
+	os.WriteFile(filepath.Join(dir, "run.go"), []byte(source), 0644)
+
+	patch := `
+<replace path="run.go">
+<search>
+	count := getCount()
+	if cnt > 0 {
+		execute()
+	}
+</search>
+<with>
+	count := getCount()
+	if count > 0 {
+		executeUpdated()
+	}
+</with>
+</replace>
+`
+	var outBuf bytes.Buffer
+	inBuf := bytes.NewBufferString("y\n")
+
+	opts := PatchOptions{
+		AutoFix: true,
+		Stdin:   inBuf,
+		Stdout:  &outBuf,
+	}
+
+	_, err := Apply(dir, patch, opts)
+	if err != nil {
+		t.Fatalf("Interactive prompt fix failed: %v", err)
+	}
+
+	updated, _ := os.ReadFile(filepath.Join(dir, "run.go"))
+	if !strings.Contains(string(updated), "executeUpdated()") {
+		t.Errorf("Substitution was not applied after accepting interactive prompt:\n%s", string(updated))
 	}
 }
