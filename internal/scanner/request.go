@@ -13,6 +13,7 @@ import (
 
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/fileutil"
+	"github.com/JohnEsleyer/textify/internal/parser"
 )
 
 // LineRange represents a 1-based start and end line range.
@@ -34,6 +35,8 @@ type FileRequest struct {
 	From    string // Start pattern for block extraction
 	To      string // End pattern for block extraction
 	Anchor  string // Anchor pattern
+	Def     string // Exact symbol definition requested via AST
+	Trace   bool   // Trace execution flow funcA() -> funcB() -> funcC()
 }
 
 var (
@@ -42,6 +45,12 @@ var (
 
 	// Matches XML-style project-wide grep/search tags: <grep pattern="foo" context="10" />
 	xmlGrepRegex = regexp.MustCompile(`(?i)<(?:grep|search|find)\s+([^>]+?)(?:/>|>.*?</(?:grep|search|find)>|>)`)
+
+	// Matches XML-style <def name="Foo" trace="true" /> tags
+	xmlDefRegex  = regexp.MustCompile(`(?i)<(?:def|definition)\s+([^>]+?)(?:/>|>.*?</(?:def|definition)>|>)`)
+	xmlAttrTrace = regexp.MustCompile(`(?i)\btrace=["']?(true|false|1|0)["']?`)
+	xmlAttrName  = regexp.MustCompile(`(?i)\b(?:name|symbol|struct|func|id)=["']([^"']+)["']`)
+	xmlAttrDef   = regexp.MustCompile(`(?i)\b(?:def|definition)=["']([^"']+)["']`)
 
 	xmlAttrPath    = regexp.MustCompile(`(?i)\b(?:path|file|src)=["']([^"']+)["']`)
 	xmlAttrLines   = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
@@ -112,6 +121,37 @@ func ParseLineRanges(s string) []LineRange {
 func ParseRequest(input string) []FileRequest {
 	var requests []FileRequest
 	seen := make(map[string]bool)
+
+	// 0. <def name="..." file="..." trace="true" /> tags
+	defMatches := xmlDefRegex.FindAllStringSubmatch(input, -1)
+	for _, m := range defMatches {
+		attrs := m[1]
+		nameMatch := xmlAttrName.FindStringSubmatch(attrs)
+		if len(nameMatch) < 2 {
+			continue
+		}
+		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
+		pathVal := ""
+		if len(pathMatch) >= 2 {
+			pathVal = filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
+		}
+
+		traceVal := false
+		if traceMatch := xmlAttrTrace.FindStringSubmatch(attrs); len(traceMatch) >= 2 {
+			traceVal = traceMatch[1] == "true" || traceMatch[1] == "1"
+		}
+
+		req := FileRequest{
+			Path:  pathVal,
+			Def:   strings.TrimSpace(nameMatch[1]),
+			Trace: traceVal,
+		}
+		key := fmt.Sprintf("DEF|%s|%s|%t", req.Def, req.Path, req.Trace)
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, req)
+		}
+	}
 
 	// 1. Project-wide <grep ... /> or <search ... /> tags
 	grepMatches := xmlGrepRegex.FindAllStringSubmatch(input, -1)
@@ -207,13 +247,24 @@ func ParseRequest(input string) []FileRequest {
 			req.Anchor = strings.TrimSpace(anchorMatch[1])
 		}
 
+		if defMatch := xmlAttrDef.FindStringSubmatch(attrs); len(defMatch) >= 2 {
+			req.Def = strings.TrimSpace(defMatch[1])
+		}
+		if traceMatch := xmlAttrTrace.FindStringSubmatch(attrs); len(traceMatch) >= 2 {
+			req.Trace = traceMatch[1] == "true" || traceMatch[1] == "1"
+		}
+		// Allow <file path="..." symbol="Foo" trace="true" /> as an AST request.
+		if req.Def == "" && req.Trace && len(req.Symbols) == 1 {
+			req.Def = req.Symbols[0]
+		}
+
 		ctx := 10
 		if ctxMatch := xmlAttrContext.FindStringSubmatch(attrs); len(ctxMatch) >= 2 {
 			ctx, _ = strconv.Atoi(ctxMatch[1])
 		}
 		req.Context = ctx
 
-		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor)
+		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s|%s|%t", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor, req.Def, req.Trace)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
@@ -249,6 +300,26 @@ func ParseRequest(input string) []FileRequest {
 			}
 		}
 
+		// Check for markdown bullet definitions/traces: - def: "Foo" / - trace: Foo
+		if p == "def" || p == "definition" || p == "trace" || p == "flow" {
+			name := ""
+			if len(m) >= 3 && m[2] != "" {
+				name = strings.Trim(strings.TrimSpace(m[2]), `"' `)
+			}
+			if name != "" {
+				req := FileRequest{
+					Def:   name,
+					Trace: p == "trace" || p == "flow",
+				}
+				key := fmt.Sprintf("DEF|%s|%t", req.Def, req.Trace)
+				if !seen[key] {
+					seen[key] = true
+					requests = append(requests, req)
+				}
+				continue
+			}
+		}
+
 		req := FileRequest{Path: p, Context: 10}
 
 		if len(m) >= 3 && m[2] != "" {
@@ -258,6 +329,13 @@ func ParseRequest(input string) []FileRequest {
 			case strings.HasPrefix(detail, "search:") || strings.HasPrefix(detail, "grep:") || strings.HasPrefix(detail, "find:"):
 				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
 				req.Query = strings.Trim(val, `"' `)
+			case strings.HasPrefix(detail, "def:") || strings.HasPrefix(detail, "definition:"):
+				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
+				req.Def = strings.Trim(val, `"' `)
+			case strings.HasPrefix(detail, "trace:") || strings.HasPrefix(detail, "flow:"):
+				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
+				req.Def = strings.Trim(val, `"' `)
+				req.Trace = true
 			case strings.HasPrefix(detail, "symbols:") || strings.HasPrefix(detail, "symbol:"):
 				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
 				for _, sym := range strings.Split(val, ",") {
@@ -284,7 +362,7 @@ func ParseRequest(input string) []FileRequest {
 			}
 		}
 
-		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor)
+		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s|%s|%t", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor, req.Def, req.Trace)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
@@ -310,9 +388,31 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 
 	result := &ScanResult{}
 
+	// Normalize trace requests that used symbol="..." without def="...".
+	for i := range requests {
+		if requests[i].Def == "" && requests[i].Trace && len(requests[i].Symbols) == 1 {
+			requests[i].Def = requests[i].Symbols[0]
+		}
+	}
+
+	// Build the AST index once if any request needs exact definitions or traces.
+	var astIndex *parser.CodebaseIndex
+	for _, req := range requests {
+		if req.Def != "" || req.Trace {
+			astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			break
+		}
+	}
+
 	// Expand requests (globs or project-wide greps)
 	var expandedRequests []FileRequest
 	for _, req := range requests {
+		// AST definition/trace requests are resolved directly against the index.
+		if req.Def != "" || req.Trace {
+			expandedRequests = append(expandedRequests, req)
+			continue
+		}
+
 		// Project-wide grep (no specific file path)
 		if req.Path == "" && req.Query != "" {
 			pattern := req.Glob
@@ -358,6 +458,41 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 	}
 
 	for _, req := range expandedRequests {
+		// AST-backed exact definition and optional execution flow trace.
+		if req.Def != "" {
+			if astIndex == nil {
+				var idxErr error
+				astIndex, idxErr = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+				if idxErr != nil || astIndex == nil {
+					if !opts.Stdout {
+						fmt.Printf("⚠️ Warning: Could not build AST index: %v\n", idxErr)
+					}
+					continue
+				}
+			}
+
+			rendered := buildASTContent(astIndex, req, opts.RedactSecrets)
+			formatted := renderFormattedEntry(rendered.label, rendered.content, format, rendered.startLine, rendered.endLine)
+
+			n, writeErr := bufWriter.WriteString(formatted)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			result.RedactedSecrets += rendered.redacted
+
+			if !opts.Stdout {
+				desc := fmt.Sprintf("definition: %s", req.Def)
+				if req.Trace {
+					desc = fmt.Sprintf("definition + trace: %s", req.Def)
+				}
+				fmt.Printf("Added: %s (%s)\n", rendered.label, desc)
+			}
+			continue
+		}
+
 		absPath := filepath.Join(rootPath, filepath.FromSlash(req.Path))
 
 		isBin, err := fileutil.IsBinary(absPath)
@@ -420,6 +555,80 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 	return result, nil
 }
 
+type astRenderResult struct {
+	content   string
+	label     string
+	startLine int
+	endLine   int
+	redacted  int
+}
+
+// buildASTContent resolves a symbol against the AST index and renders its
+// definition with exact source line numbers. When req.Trace is set, the
+// execution flow or type dependency hierarchy is prepended.
+func buildASTContent(index *parser.CodebaseIndex, req FileRequest, redact bool) astRenderResult {
+	var sb strings.Builder
+
+	if req.Trace {
+		sb.WriteString(index.TraceFlow(req.Def, 5))
+		sb.WriteString("\n")
+	}
+
+	syms := index.FindDefinition(req.Def, req.Path)
+	firstFile := ""
+	startLine := 0
+	endLine := 0
+
+	if len(syms) == 0 {
+		sb.WriteString(fmt.Sprintf("/* Symbol %q not found in AST index */\n", req.Def))
+	} else {
+		firstFile = syms[0].File
+		for _, sym := range syms {
+			sb.WriteString(fmt.Sprintf("/* Definition: %s %s [%s:%d-%d] */\n", sym.Kind, sym.FullName(), sym.File, sym.StartLine, sym.EndLine))
+			for offset, line := range strings.Split(sym.Body, "\n") {
+				sb.WriteString(fmt.Sprintf("%5d | %s\n", sym.StartLine+offset, line))
+			}
+			sb.WriteString("\n")
+
+			if startLine == 0 || sym.StartLine < startLine {
+				startLine = sym.StartLine
+			}
+			if sym.EndLine > endLine {
+				endLine = sym.EndLine
+			}
+		}
+	}
+
+	label := req.Path
+	if label == "" {
+		label = firstFile
+	}
+	if label == "" {
+		label = req.Def
+	}
+
+	content := sb.String()
+	redacted := 0
+	if redact {
+		content, redacted = fileutil.RedactSecrets(content)
+	}
+
+	if startLine == 0 {
+		startLine = 1
+	}
+	if endLine == 0 {
+		endLine = 1
+	}
+
+	return astRenderResult{
+		content:   content,
+		label:     label,
+		startLine: startLine,
+		endLine:   endLine,
+		redacted:  redacted,
+	}
+}
+
 func fileMatchesQuery(content, query string) bool {
 	if query == "" {
 		return true
@@ -455,10 +664,10 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 
 			if !inBlock {
 				matched := false
-				if fromErr == nil {
+				if strings.Contains(lineLower, fromLower) {
+					matched = true
+				} else if fromErr == nil {
 					matched = fromRe.MatchString(line)
-				} else {
-					matched = strings.Contains(lineLower, fromLower)
 				}
 				if matched {
 					inBlock = true
@@ -467,10 +676,10 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 			} else {
 				matched := false
 				if req.To != "" {
-					if toErr == nil {
+					if strings.Contains(lineLower, toLower) {
+						matched = true
+					} else if toErr == nil {
 						matched = toRe.MatchString(line)
-					} else {
-						matched = strings.Contains(lineLower, toLower)
 					}
 				}
 				if matched {

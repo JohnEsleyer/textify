@@ -1,6 +1,6 @@
 # Textify ⚡
 
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -135,6 +135,46 @@ When line numbers are already known from Stage 1 signatures:
 </request>
 ```
 
+### 6. AST-Exact Definitions & Execution Flow (`<def>`)
+For Go and TypeScript/JavaScript projects, Textify can parse declarations directly
+and return the exact line range instead of guessing from text patterns:
+
+```xml
+<request>
+  <!-- Exact function, method, struct, class, interface, or type definition -->
+  <def name="handleRequest" />
+  <def name="UserConfig" />
+
+  <!-- Include an execution flow: funcA() -> funcB() -> funcC() -->
+  <def name="handleRequest" trace="true" />
+
+  <!-- Also works as a file attribute; file is used as an optional filter -->
+  <file path="src/service.ts" def="UserService" trace="true" />
+</request>
+```
+
+Structs/classes trace their attached methods and type dependency hierarchy, while
+functions/methods trace their call chain. Markdown bullets `- def: Foo` and
+`- trace: Foo` are supported too.
+
+---
+
+## 🧭 Instant CLI Definition & Trace
+
+```bash
+# Print the exact definition with line numbers
+textify def handleRequest
+
+# Include the execution flow (funcA() -> funcB() -> funcC())
+textify def handleRequest --trace
+
+# Trace a function or struct/class dependency hierarchy
+textify trace UserService --lang ts
+
+# Limit indexing to Go files and copy the result to the clipboard
+textify def Server --lang go --trace -c
+```
+
 ---
 
 ## 🔍 Instant CLI Grep (`textify grep`)
@@ -161,6 +201,8 @@ textify grep "ube_arena_enter" --glob "*.go" -C 3
 | `textify signatures [flags]` | Extracts types, structs, interfaces, and function headers. |
 | `textify diff [flags]` | Bundles **only** modified, staged, or untracked Git files. |
 | `textify grep <pattern>` | Searches codebase for pattern and extracts matching context. |
+| `textify def <symbol>` | Extracts an AST-exact function/struct/class definition (Go/TypeScript). |
+| `textify trace <symbol>` | Traces a function call flow or a struct/class dependency hierarchy. |
 | `textify load [file] [flags]` | Extracts requested files, slices, searches, or symbols. |
 | `textify prompt` | Prints copy-pasteable instructions for the LLM. |
 | `textify version` | Prints current version. |
@@ -176,6 +218,15 @@ textify grep "ube_arena_enter" --glob "*.go" -C 3
 | `--stdout` | | `false` | Streams output directly to standard output (for piping). |
 | `--no-redact` | | `false` | Disables automated scrubbing of sensitive tokens/keys. |
 | `-o <file>` | | *(config)* | Override output destination filename. |
+
+### `textify def` / `textify trace` Flags
+
+| Flag | Shorthand | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `--lang` | | `all` | Languages to index: `go`, `ts`, `js`, or a comma-separated list. |
+| `--depth` | | `5` | Maximum trace depth. |
+| `--trace` | | `false` | Include execution flow with `def`. |
+| `--clip` | `-c` | `false` | Copy output directly to system clipboard. |
 
 ---
 

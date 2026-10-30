@@ -1,8 +1,13 @@
 package scanner
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/JohnEsleyer/textify/internal/config"
 )
 
 func TestParseRequestFromToAndGrep(t *testing.T) {
@@ -55,5 +60,71 @@ line 10
 	}
 	if !strings.Contains(out, "case *PromoteExpr:") || !strings.Contains(out, "genPromote(val)") {
 		t.Errorf("expected block content missing:\n%s", out)
+	}
+}
+
+func TestParseDefRequests(t *testing.T) {
+	input := `
+	<request>
+		<def name="Config" trace="true" />
+		<file path="service.ts" def="UserService" />
+		<def symbol="Router" />
+	</request>
+	`
+
+	reqs := ParseRequest(input)
+	if len(reqs) != 3 {
+		t.Fatalf("expected 3 def requests, got %d: %+v", len(reqs), reqs)
+	}
+
+	byDef := make(map[string]FileRequest)
+	for _, req := range reqs {
+		byDef[req.Def] = req
+	}
+
+	if req := byDef["Config"]; !req.Trace {
+		t.Errorf("expected Config trace request: %+v", req)
+	}
+	if req := byDef["UserService"]; req.Path != "service.ts" || req.Trace {
+		t.Errorf("unexpected file def req: %+v", req)
+	}
+	if _, ok := byDef["Router"]; !ok {
+		t.Errorf("expected Router symbol def request: %+v", reqs)
+	}
+}
+
+func TestLoadRequestsASTDefinitionAndTrace(t *testing.T) {
+	dir := t.TempDir()
+	source := `package sample
+
+func A() {
+	B()
+}
+
+func B() {
+	C()
+}
+
+func C() {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "flow.go"), []byte(source), 0644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	cfg := &config.Config{OutputFile: "out.txt"}
+	var buf bytes.Buffer
+	result, err := LoadRequests(dir, cfg, []FileRequest{{Def: "A", Trace: true}}, &buf, ScanOptions{Format: "raw"})
+	if err != nil {
+		t.Fatalf("LoadRequests failed: %v", err)
+	}
+	if result.FilesCount != 1 {
+		t.Errorf("FilesCount = %d, want 1", result.FilesCount)
+	}
+
+	output := buf.String()
+	for _, want := range []string{"Execution Flow", "A()", "B()", "C()", "/* Definition: function A", "flow.go:3-5"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("AST output missing %q:\n%s", want, output)
+		}
 	}
 }

@@ -11,10 +11,11 @@ import (
 
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/fileutil"
+	"github.com/JohnEsleyer/textify/internal/parser"
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 const configFile = "textify.yaml"
 
 func main() {
@@ -41,6 +42,10 @@ func main() {
 		runLoad(args)
 	case "grep", "search", "find":
 		runGrep(args)
+	case "def", "definition":
+		runDef(args)
+	case "trace", "flow":
+		runTrace(args)
 	case "prompt":
 		printPrompt()
 	case "version", "-v", "--version":
@@ -274,6 +279,141 @@ func runGrep(args []string) {
 	}
 }
 
+func runDef(args []string) {
+	fs := flag.NewFlagSet("def", flag.ExitOnError)
+	langFlag := fs.String("lang", "all", "Language filter (go, ts, or all)")
+	depthFlag := fs.Int("depth", 5, "Maximum trace depth when --trace is used")
+	traceFlag := fs.Bool("trace", false, "Also trace execution call flow")
+	clipFlag := fs.Bool("clip", false, "Copy definition directly to clipboard")
+	clipShortFlag := fs.Bool("c", false, "Copy definition directly to clipboard (shorthand)")
+
+	valueFlags := map[string]bool{"--lang": true, "-lang": true, "--depth": true, "-depth": true}
+	if err := fs.Parse(normalizeFlagArgs(args, valueFlags)); err != nil {
+		os.Exit(1)
+	}
+
+	if fs.NArg() == 0 {
+		fmt.Println("Usage: textify def <symbol_or_struct> [--lang go,ts] [--trace] [--depth 5] [-c]")
+		os.Exit(1)
+	}
+
+	symbol := fs.Arg(0)
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Indexing codebase and parsing AST for symbol %q...\n", symbol)
+	idx, err := parser.BuildIndex(cwd, parser.ParseLanguages(*langFlag))
+	if err != nil {
+		fmt.Printf("Error indexing: %v\n", err)
+		os.Exit(1)
+	}
+
+	var output strings.Builder
+	if *traceFlag {
+		output.WriteString(idx.TraceFlow(symbol, *depthFlag))
+		output.WriteString("\n")
+	}
+
+	syms := idx.FindDefinition(symbol, "")
+	if len(syms) == 0 {
+		fmt.Fprintf(os.Stderr, "Symbol %q not found in indexed files.\n", symbol)
+		os.Exit(1)
+	}
+
+	for _, s := range syms {
+		output.WriteString(fmt.Sprintf("--- %s %s [%s:%d-%d] ---\n", s.Kind, s.FullName(), s.File, s.StartLine, s.EndLine))
+		for offset, line := range strings.Split(s.Body, "\n") {
+			output.WriteString(fmt.Sprintf("%5d | %s\n", s.StartLine+offset, line))
+		}
+		output.WriteString("\n")
+	}
+
+	fmt.Print(output.String())
+
+	if *clipFlag || *clipShortFlag {
+		if clipErr := fileutil.CopyToClipboard(output.String()); clipErr == nil {
+			fmt.Fprintln(os.Stderr, "✔ Definition copied to clipboard!")
+		} else {
+			fmt.Fprintf(os.Stderr, "Notice: Could not copy to clipboard (%v)\n", clipErr)
+		}
+	}
+}
+
+func runTrace(args []string) {
+	fs := flag.NewFlagSet("trace", flag.ExitOnError)
+	langFlag := fs.String("lang", "all", "Language filter (go, ts, or all)")
+	depthFlag := fs.Int("depth", 5, "Maximum call chain depth")
+	clipFlag := fs.Bool("clip", false, "Copy trace directly to clipboard")
+	clipShortFlag := fs.Bool("c", false, "Copy trace directly to clipboard (shorthand)")
+
+	valueFlags := map[string]bool{"--lang": true, "-lang": true, "--depth": true, "-depth": true}
+	if err := fs.Parse(normalizeFlagArgs(args, valueFlags)); err != nil {
+		os.Exit(1)
+	}
+
+	if fs.NArg() == 0 {
+		fmt.Println("Usage: textify trace <function_or_struct> [--lang go,ts] [--depth 5] [-c]")
+		os.Exit(1)
+	}
+
+	symbol := fs.Arg(0)
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Building AST execution flow for %q...\n", symbol)
+	idx, err := parser.BuildIndex(cwd, parser.ParseLanguages(*langFlag))
+	if err != nil {
+		fmt.Printf("Error building AST index: %v\n", err)
+		os.Exit(1)
+	}
+
+	matches := idx.FindDefinition(symbol, "")
+	if len(matches) == 0 {
+		fmt.Fprintf(os.Stderr, "Symbol %q not found in indexed files.\n", symbol)
+		os.Exit(1)
+	}
+
+	trace := idx.TraceFlow(symbol, *depthFlag)
+	fmt.Print(trace)
+
+	if *clipFlag || *clipShortFlag {
+		if clipErr := fileutil.CopyToClipboard(trace); clipErr == nil {
+			fmt.Fprintln(os.Stderr, "✔ Execution trace copied to clipboard!")
+		} else {
+			fmt.Fprintf(os.Stderr, "Notice: Could not copy to clipboard (%v)\n", clipErr)
+		}
+	}
+}
+
+// normalizeFlagArgs allows flags to appear after positional arguments, e.g.
+// "textify trace Foo --depth 3" instead of requiring "textify trace --depth 3 Foo".
+func normalizeFlagArgs(args []string, valueFlags map[string]bool) []string {
+	var flags []string
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			if valueFlags[arg] && i+1 < len(args) {
+				flags = append(flags, arg+"="+args[i+1])
+				i++
+			} else {
+				flags = append(flags, arg)
+			}
+			continue
+		}
+		positional = append(positional, arg)
+	}
+
+	return append(flags, positional...)
+}
+
 func runLoad(args []string) {
 	fs := flag.NewFlagSet("load", flag.ExitOnError)
 	formatFlag := fs.String("format", "", "Output format: raw, markdown, or xml")
@@ -332,7 +472,7 @@ func runLoad(args []string) {
 		}
 		if len(reqData) == 0 {
 			if clipText, err := fileutil.ReadFromClipboard(); err == nil {
-				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<request") || strings.Contains(clipText, "<grep") {
+				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<request") || strings.Contains(clipText, "<grep") || strings.Contains(clipText, "<def") || strings.Contains(clipText, "<definition") {
 					reqData = []byte(clipText)
 					fmt.Println("Auto-detected request from system clipboard")
 				}
@@ -350,7 +490,7 @@ func runLoad(args []string) {
 	requests := scanner.ParseRequest(string(reqData))
 	if len(requests) == 0 {
 		fmt.Println("No valid file or grep requests found in the input.")
-		fmt.Println("Ensure the request contains <request><file path=\"...\" /></request>, <grep ... />, or bullet lists.")
+		fmt.Println("Ensure the request contains <request><file path=\"...\" /></request>, <grep ... />, <def ... />, or bullet lists.")
 		os.Exit(1)
 	}
 
@@ -440,6 +580,14 @@ Use targeted requests:
   <!-- Extract an entire function or struct by symbol name -->
   <file path="path/to/file.ext" symbol="function_or_struct_name" />
 
+  <!-- AST-exact definition (Go/TypeScript) with precise line numbers -->
+  <def name="handleRequest" />
+  <def name="UserConfig" />
+
+  <!-- AST-exact definition plus execution / dependency flow -->
+  <def name="handleRequest" trace="true" />
+  <file path="path/to/file.ts" def="UserService" trace="true" />
+
   <!-- Explicit line range (only if already known from signatures above) -->
   <file path="path/to/file.ext" lines="50-120" />
 </request>
@@ -449,6 +597,8 @@ Markdown bullet lists are also supported:
 - path/to/file.ext (find: "keyword", context: 15)
 - path/to/file.ext (from: "case *Foo:", to: "case *")
 - path/to/file.ext (symbol: MyFunction)
+- def: MyFunction
+- trace: MyStruct
 
 Otherwise, proceed directly with your solution.
 --------------------------------------------------------------------------------`)
@@ -463,9 +613,16 @@ func printHelp() {
 	fmt.Println("  textify signatures [flags]   Extracts structs, types, interfaces, and function signatures")
 	fmt.Println("  textify diff [flags]         Only includes modified and untracked git files")
 	fmt.Println("  textify grep <pattern> [opts]Searches project for pattern and outputs matching context")
+	fmt.Println("  textify def <symbol> [flags]  Extracts an AST-exact function/struct definition (Go/TypeScript)")
+	fmt.Println("  textify trace <symbol> [flags] Traces a function or struct dependency flow")
 	fmt.Println("  textify load [file] [flags]  Extracts requested files, slices, searches, or symbols")
 	fmt.Println("  textify prompt               Prints the instruction prompt to paste to the LLM")
 	fmt.Println("  textify version              Shows current version")
+	fmt.Println("\nFlags for def/trace:")
+	fmt.Println("  --lang <go,ts,all>           Languages to index (default all)")
+	fmt.Println("  --depth <num>                Maximum trace depth (default 5)")
+	fmt.Println("  --trace                      Include execution flow with def")
+	fmt.Println("  --clip, -c                   Copy output to clipboard")
 	fmt.Println("\nFlags for grep:")
 	fmt.Println("  -C <num>                     Lines of context around match (default 2)")
 	fmt.Println("  --clip, -c                   Copy grep results to clipboard")
