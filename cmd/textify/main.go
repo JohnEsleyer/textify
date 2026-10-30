@@ -151,36 +151,44 @@ Common Flags:
 }
 
 func normalizeFlagArgs(args []string, valueFlags map[string]bool) []string {
-	var normalized []string
+	var flags []string
+	var positionals []string
+
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if strings.HasPrefix(arg, "--") && len(arg) > 2 {
-			normalized = append(normalized, arg)
+
+		// Flags with values (e.g. -f tags, --config file.yaml)
+		if valueFlags[arg] && i+1 < len(args) {
+			flags = append(flags, arg, args[i+1])
+			i++
 			continue
 		}
-		if strings.HasPrefix(arg, "-") && len(arg) > 2 && !strings.Contains(arg, "=") {
-			if valueFlags[arg] || arg == "-ci" {
-				normalized = append(normalized, arg)
-				continue
-			}
-			chars := arg[1:]
-			allLetters := true
-			for _, ch := range chars {
-				if ch < 'a' || ch > 'z' {
-					allLetters = false
-					break
-				}
-			}
-			if allLetters {
+
+		if strings.HasPrefix(arg, "-") {
+			// Handle bundled boolean flags like -ci, -cs, etc.
+			if !strings.HasPrefix(arg, "--") && len(arg) > 2 && !strings.Contains(arg, "=") && arg != "-ci" {
+				chars := arg[1:]
+				allLetters := true
 				for _, ch := range chars {
-					normalized = append(normalized, fmt.Sprintf("-%c", ch))
+					if ch < 'a' || ch > 'z' {
+						allLetters = false
+						break
+					}
 				}
-				continue
+				if allLetters {
+					for _, ch := range chars {
+						flags = append(flags, fmt.Sprintf("-%c", ch))
+					}
+					continue
+				}
 			}
+			flags = append(flags, arg)
+		} else {
+			positionals = append(positionals, arg)
 		}
-		normalized = append(normalized, arg)
 	}
-	return normalized
+
+	return append(flags, positionals...)
 }
 
 func runInit(args []string) {
