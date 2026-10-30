@@ -414,7 +414,7 @@ func (idx *CodebaseIndex) TraceDeep(rootSymbol string, maxDepth int) *DeepTraceR
 			}
 		}
 
-		if depth >= maxDepth {
+		if depth > maxDepth {
 			return
 		}
 
