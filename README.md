@@ -1,4 +1,3 @@
-
 # Textify ⚡
 
 [![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
@@ -142,6 +141,49 @@ Bundle complete end-to-end features (definitions + traces + touchpoints) in one 
 
 ---
 
+## 📥 How to Run `textify load`
+
+`textify load` executes LLM request directives (`<trace>`, `<file>`, `<select>`, `<grep>`, etc.) and extracts the requested context in-memory.
+
+> ℹ️ **Where does the output go?**  
+> `textify load` does **not** write to a file by default. Without `-c` or `-s`, it prints progress updates and token summaries to your terminal. Use `-c` to copy results to the system clipboard or `-s` to write to standard output.
+
+### Common Usage Examples:
+
+- **1-Click Clipboard Pipeline (Recommended):**
+  Copy the LLM's `<request>...</request>` block to your clipboard, then run:
+  ```bash
+  textify load -ci -c
+  ```
+  *(Reads from clipboard `-ci` and copies the loaded context back to clipboard `-c`)*
+
+- **Load from file directly to clipboard:**
+  ```bash
+  textify load request.xml -c
+  ```
+
+- **Print loaded context to terminal:**
+  ```bash
+  textify load request.xml -s
+  ```
+
+- **Save loaded context to a disk file:**
+  ```bash
+  textify load request.xml -s > context.txt
+  ```
+
+- **Pipe through standard input:**
+  ```bash
+  cat request.xml | textify load -c
+  ```
+
+- **Redact secrets and tokens while loading:**
+  ```bash
+  textify load -ci -c -r
+  ```
+
+---
+
 ## 🤖 System Prompt for LLMs (Enforcing 1–2 Request Workflows)
 
 Paste this prompt alongside your codebase signatures or output from `textify prompt`:
@@ -261,6 +303,46 @@ func main() {}
 <!-- Delete -->
 <delete path="obsolete.go" />
 ```
+
+---
+
+## 🚀 How to Apply Patches (`textify patch`)
+
+`textify patch` applies multi-file modifications atomically using a two-pass Virtual File System (VFS). If any file search block or anchor fails to match, **no disk files are modified**.
+
+### Common Usage Examples:
+
+- **Apply patch directly from clipboard (Recommended):**
+  Copy the LLM's patch response to your clipboard, then run:
+  ```bash
+  textify patch -ci
+  ```
+
+- **Apply patch from a saved file:**
+  ```bash
+  textify patch patch.xml
+  ```
+
+- **Dry-run validation (Preview without disk changes):**
+  Validate that all `<search>`, `<replace>`, and `<file>` blocks match cleanly before modifying disk:
+  ```bash
+  textify patch patch.xml -n
+  # or directly from clipboard:
+  textify patch -ci -n
+  ```
+
+- **Fuzzy matching tolerance (`-f`, `--fix`):**
+  Tolerate minor whitespace or indentation drift from LLM outputs:
+  ```bash
+  textify patch patch.xml -f
+  # or from clipboard:
+  textify patch -ci -f
+  ```
+
+- **Pipe patch via stdin:**
+  ```bash
+  cat solution.xml | textify patch
+  ```
 
 ---
 
