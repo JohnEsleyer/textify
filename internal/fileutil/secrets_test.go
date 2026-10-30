@@ -1,14 +1,15 @@
 package fileutil
 
 import (
+	"strings"
 	"testing"
 )
 
 func TestRedactSecrets(t *testing.T) {
 	input := `
-AWS_KEY=AKIAIOSFODNN7EXAMPLE
-GITHUB_PAT=ghp_0123456789abcdefghijklmnopqrstuvwxyz
-api_key: "super_secret_token_123456"
+AWS_KEY="AKIA1234567890ABCDEF"
+GITHUB_PAT="ghp_123456789012345678901234567890123456"
+api_key="abcdef1234567890_secret_token"
 normal_var = "hello world"
 `
 	cleaned, count := RedactSecrets(input)
@@ -17,28 +18,24 @@ normal_var = "hello world"
 		t.Fatalf("Expected at least 3 redacted secrets, got %d", count)
 	}
 
-	if containsString(cleaned, "AKIAIOSFODNN7EXAMPLE") {
+	// Verify the real secrets were removed
+	if strings.Contains(cleaned, "AKIA1234567890ABCDEF") {
 		t.Errorf("AWS Key was not redacted")
 	}
-
-	if containsString(cleaned, "ghp_0123456789abcdefghijklmnopqrstuvwxyz") {
+	if strings.Contains(cleaned, "ghp_123456789012345678901234567890123456") {
 		t.Errorf("GitHub token was not redacted")
 	}
+	if strings.Contains(cleaned, "abcdef1234567890_secret_token") {
+		t.Errorf("Generic API key was not redacted")
+	}
 
-	if !containsString(cleaned, "normal_var = \"hello world\"") {
+	// Verify replacement token exists
+	if !strings.Contains(cleaned, "[REDACTED SECRET]") {
+		t.Errorf("Cleaned output does not contain [REDACTED SECRET]")
+	}
+
+	// Verify harmless text is preserved
+	if !strings.Contains(cleaned, `normal_var = "hello world"`) {
 		t.Errorf("Non-secret code was modified unexpectedly")
 	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || (len(s) > len(substr) && stringIndex(s, substr) >= 0))
-}
-
-func stringIndex(s, substr string) int {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }

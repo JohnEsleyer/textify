@@ -12,10 +12,11 @@ import (
 	"github.com/JohnEsleyer/textify/internal/config"
 	"github.com/JohnEsleyer/textify/internal/fileutil"
 	"github.com/JohnEsleyer/textify/internal/parser"
+	"github.com/JohnEsleyer/textify/internal/patcher"
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 const configFile = "textify.yaml"
 
 func main() {
@@ -40,6 +41,8 @@ func main() {
 		runStart(args, false, true)
 	case "load":
 		runLoad(args)
+	case "patch", "apply", "patcher":
+		runPatch(args)
 	case "grep", "search", "find":
 		runGrep(args)
 	case "def", "definition":
@@ -391,8 +394,6 @@ func runTrace(args []string) {
 	}
 }
 
-// normalizeFlagArgs allows flags to appear after positional arguments, e.g.
-// "textify trace Foo --depth 3" instead of requiring "textify trace --depth 3 Foo".
 func normalizeFlagArgs(args []string, valueFlags map[string]bool) []string {
 	var flags []string
 	var positional []string
@@ -560,6 +561,127 @@ func runLoad(args []string) {
 	fmt.Printf("--------------------------------------------------\n")
 }
 
+func runPatch(args []string) {
+	fs := flag.NewFlagSet("patch", flag.ExitOnError)
+	dryRunFlag := fs.Bool("dry-run", false, "Preview changes without modifying files on disk")
+	dryRunShortFlag := fs.Bool("n", false, "Preview changes without modifying files on disk (shorthand)")
+	clipInFlag := fs.Bool("clip-in", false, "Read patch directly from system clipboard")
+	clipInShortFlag := fs.Bool("ci", false, "Read patch directly from system clipboard (shorthand)")
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	dryRun := *dryRunFlag || *dryRunShortFlag
+	fromClip := *clipInFlag || *clipInShortFlag
+
+	var patchData []byte
+	positional := fs.Args()
+
+	if fromClip {
+		clipText, err := fileutil.ReadFromClipboard()
+		if err != nil {
+			fmt.Printf("Error reading from clipboard: %v\n", err)
+			os.Exit(1)
+		}
+		patchData = []byte(clipText)
+	} else if len(positional) > 0 && positional[0] != "-" {
+		patchFile := positional[0]
+		data, err := os.ReadFile(patchFile)
+		if err != nil {
+			fmt.Printf("Error reading patch file %s: %v\n", patchFile, err)
+			os.Exit(1)
+		}
+		patchData = data
+	} else if len(positional) > 0 && positional[0] == "-" {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Printf("Error reading from stdin: %v\n", err)
+			os.Exit(1)
+		}
+		patchData = data
+	} else {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			if data, err := io.ReadAll(os.Stdin); err == nil && len(data) > 0 {
+				patchData = data
+			}
+		}
+		if len(patchData) == 0 {
+			for _, candidate := range []string{"patch.txt", "changes.txt", "patcher.txt"} {
+				if data, err := os.ReadFile(candidate); err == nil && len(data) > 0 {
+					patchData = data
+					fmt.Printf("Auto-detected patch from %s\n", candidate)
+					break
+				}
+			}
+		}
+		if len(patchData) == 0 {
+			if clipText, err := fileutil.ReadFromClipboard(); err == nil {
+				if strings.Contains(clipText, "<file") || strings.Contains(clipText, "<replace") || strings.Contains(clipText, "<delete") {
+					patchData = []byte(clipText)
+					fmt.Println("Auto-detected patch from system clipboard")
+				}
+			}
+		}
+		if len(patchData) == 0 {
+			fmt.Println("Error: No patch source provided.")
+			fmt.Println("Usage: textify patch [patch-file.txt] [--dry-run]")
+			fmt.Println("       textify patch -ci              (apply patch directly from clipboard)")
+			fmt.Println("       cat changes.txt | textify patch -")
+			os.Exit(1)
+		}
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	result, err := patcher.Apply(cwd, string(patchData), patcher.PatchOptions{
+		DryRun: dryRun,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Patch validation failed. Zero files were modified.\n")
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(result.Changes) == 0 {
+		fmt.Println("Notice: No patch directives found in input.")
+		return
+	}
+
+	if dryRun {
+		fmt.Println("✔ [DRY RUN] All patch directives validated successfully.")
+		fmt.Println("The following changes would be applied:")
+		for _, ch := range result.Changes {
+			fmt.Printf("  %s %-6s %s (%s)\n", changeIcon(ch.Type), ch.Type, ch.Path, ch.Description)
+		}
+		fmt.Printf("\nTotal: %d change(s) verified. Zero files modified on disk.\n", len(result.Changes))
+		return
+	}
+
+	fmt.Println("✔ Patch applied successfully!")
+	for _, ch := range result.Changes {
+		fmt.Printf("  %s %-6s %s (%s)\n", changeIcon(ch.Type), ch.Type, ch.Path, ch.Description)
+	}
+	fmt.Printf("\nTotal: %d change(s) applied.\n", len(result.Changes))
+}
+
+func changeIcon(t patcher.FileChangeType) string {
+	switch t {
+	case patcher.ChangeCreate:
+		return "+"
+	case patcher.ChangeUpdate:
+		return "~"
+	case patcher.ChangeDelete:
+		return "-"
+	}
+	return "•"
+}
+
 func printPrompt() {
 	fmt.Println(`Copy and paste this prompt to the LLM alongside your signatures:
 --------------------------------------------------------------------------------
@@ -592,20 +714,63 @@ Use targeted requests:
   <file path="path/to/file.ext" lines="50-120" />
 </request>
 
-Markdown bullet lists are also supported:
-- grep: "search_term"
-- path/to/file.ext (find: "keyword", context: 15)
-- path/to/file.ext (from: "case *Foo:", to: "case *")
-- path/to/file.ext (symbol: MyFunction)
-- def: MyFunction
-- trace: MyStruct
+When providing solutions or code edits, output patch directives using <file>, <replace>, or <delete>:
 
-Otherwise, proceed directly with your solution.
+1. Create or overwrite a file:
+<file path="path/to/file.ext">
+... full content ...
+</file>
+
+2. Targeted region update (PREFER symbol or <search> with ...):
+<replace path="path/to/file.ext" symbol="functionOrStructName">
+<with>
+... replacement declaration ...
+</with>
+</replace>
+
+<replace path="path/to/file.ext">
+<search>
+prefix code
+...
+lines to replace
+...
+suffix code
+</search>
+<with>
+prefix code
+...
+new replacement lines
+...
+suffix code
+</with>
+</replace>
+
+3. Anchor insertions or pattern ranges:
+<replace path="path/to/file.ext" after="anchor line">
+<with>
+new code
+</with>
+</replace>
+
+<replace path="path/to/file.ext" from="start_pattern" to="end_pattern">
+<with>
+replacement block
+</with>
+</replace>
+
+4. Delete a file:
+<delete path="path/to/obsolete.ext" />
+
+CRITICAL RULES FOR PATCH DIRECTIVES:
+- NEVER put '<' or '>' inside XML attributes (use <search> block instead).
+- Prefer symbol="..." over multiple partial replacements in the same function.
+- Every <replace> MUST have a target (symbol, search block, from/to, after, before, or lines).
+- Use '...' wildcards in <search> blocks to match surrounding unchanged boilerplate.
 --------------------------------------------------------------------------------`)
 }
 
 func printHelp() {
-	fmt.Println("Textify - Turn your codebase into AI-ready text")
+	fmt.Println("Textify - Turn your codebase into AI-ready text & safely apply patches")
 	fmt.Println("\nUsage:")
 	fmt.Println("  textify init                 Scans folders and generates textify.yaml")
 	fmt.Println("  textify scan                 Detects new folders and updates textify.yaml")
@@ -613,11 +778,15 @@ func printHelp() {
 	fmt.Println("  textify signatures [flags]   Extracts structs, types, interfaces, and function signatures")
 	fmt.Println("  textify diff [flags]         Only includes modified and untracked git files")
 	fmt.Println("  textify grep <pattern> [opts]Searches project for pattern and outputs matching context")
-	fmt.Println("  textify def <symbol> [flags]  Extracts an AST-exact function/struct definition (Go/TypeScript)")
+	fmt.Println("  textify def <symbol> [flags] Extracts an AST-exact function/struct definition (Go/TypeScript)")
 	fmt.Println("  textify trace <symbol> [flags] Traces a function or struct dependency flow")
 	fmt.Println("  textify load [file] [flags]  Extracts requested files, slices, searches, or symbols")
+	fmt.Println("  textify patch [file] [flags] Safely applies multi-file LLM patches (atomic VFS)")
 	fmt.Println("  textify prompt               Prints the instruction prompt to paste to the LLM")
 	fmt.Println("  textify version              Shows current version")
+	fmt.Println("\nFlags for patch:")
+	fmt.Println("  --dry-run, -n                Validate and preview changes without modifying files")
+	fmt.Println("  --clip-in, -ci               Read patch directly from system clipboard")
 	fmt.Println("\nFlags for def/trace:")
 	fmt.Println("  --lang <go,ts,all>           Languages to index (default all)")
 	fmt.Println("  --depth <num>                Maximum trace depth (default 5)")

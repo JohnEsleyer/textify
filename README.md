@@ -1,12 +1,12 @@
 # Textify ⚡
 
-[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**Textify** is a high-performance CLI tool that converts your codebase into structured, AI-ready context for Large Language Models (LLMs) such as Claude, ChatGPT, DeepSeek, and Gemini.
+**Textify** is a high-performance CLI tool that converts your codebase into structured, AI-ready context for Large Language Models (LLMs) such as Claude, ChatGPT, DeepSeek, and Gemini — and **safely applies multi-file code modifications** directly back to your project.
 
-Instead of dumping bloated folders into chat windows, Textify structures your project with directory trees, 1-based source line numbers, automated secret redaction, and a **2-stage interactive workflow** that saves up to 90% of your tokens.
+Instead of dumping bloated folders into chat windows or manually editing files, Textify provides a complete **3-stage interactive round-trip workflow** that saves up to 90% of your tokens and applies AI-suggested modifications with zero manual copy-pasting errors.
 
 ---
 
@@ -14,8 +14,10 @@ Instead of dumping bloated folders into chat windows, Textify structures your pr
 
 - 📉 **Save 80–90% of Tokens:** Export lightweight type and function signatures first. Then, load only the exact files, sections, or search terms requested by the AI.
 - 🎯 **Stop Guessing Line Numbers:** AI models can request code using keywords (`find="..."`), block delimiters (`from="..." to="..."`), function/struct names (`symbol="..."`), or project-wide keyword search (`<grep pattern="..." />`).
+- 🩹 **Atomic Two-Pass Patch Application (`textify patch`):** Safely apply multi-file modifications from LLMs. All changes are validated in an in-memory Virtual File System (VFS) first — if any search target fails, **zero files on disk are touched**.
+- 🧩 **5-Tier Fuzzy Search Matching & Ellipsis (`...`):** Match code regardless of CRLF vs LF, trailing whitespace, or indentation shifts, and use `...` to preserve boilerplate without reproducing it.
 - ⚡ **Instant Search CLI (`textify grep`):** Locate any identifier across the entire project with surrounding context lines and copy directly to your clipboard.
-- 📋 **1-Click Clipboard Workflow:** Pipe requests straight from clipboard to clipboard with `textify load -ci -c`. Zero file juggling required.
+- 📋 **1-Click Clipboard Workflow:** Pipe requests straight from clipboard to clipboard with `textify load -ci -c` and apply with `textify patch -ci`. Zero file juggling required.
 - 🛡️ **Automated Secret Redaction:** Scrub API keys, private keys, AWS tokens, and GitHub PATs before code ever leaves your machine.
 
 ---
@@ -31,13 +33,13 @@ go install github.com/JohnEsleyer/textify/cmd/textify@latest
 ```bash
 git clone https://github.com/JohnEsleyer/textify.git
 cd textify
-go install .
+go install ./cmd/textify
 ```
-*(Or compile locally with `go build .`)*
+*(Or compile locally with `go build -o textify ./cmd/textify`)*
 
 ---
 
-## 🎯 The 2-Stage Interactive Workflow
+## 🎯 The 3-Stage Interactive Workflow
 
 ```
 ┌─────────────────┐       1. textify signatures -c      ┌─────────────────┐
@@ -47,12 +49,18 @@ go install .
 │  Local Codebase │                                     │ (Claude/ChatGPT)│
 │                 │◄────────────────────────────────────┤                 │
 │                 │       3. LLM returns <request> tags │                 │
-└────────┬────────┘                                     └─────────────────┘
-         │
-         │ 4. textify load -ci -c
-         ▼
-   Clipboard filled with ONLY
-   requested lines & functions
+└────────┬────────┘                                     └────────┬────────┘
+         │                                                       │
+         │ 4. textify load -ci -c                                │ 5. LLM returns patch
+         ▼                                                       │    (<file>, <replace>, <delete>)
+   Clipboard filled with ONLY                                    │
+   requested lines & functions                                   ▼
+         │                                              ┌─────────────────┐
+         └─────────────────────────────────────────────►│ 6. textify patch│
+                                                        │    -ci          │
+                                                        └─────────────────┘
+                                                                 │
+                                                        Atomic disk update
 ```
 
 ### Stage 1: Export Signatures & Prompt the LLM
@@ -62,7 +70,7 @@ go install .
    ```
 2. Paste into your LLM chat.
 3. Append instructions by copying from `textify prompt`:
-   > *"If you need full implementations, respond using `<request><file path="..." find="..." /></request>` or `<grep pattern="..." />`."*
+   > *"If you need full implementations, respond using `<request><file path="..." find="..." /></request>`. When writing solutions, provide patch directives using `<file>`, `<replace>`, or `<delete>`."*
 
 ### Stage 2: Load the AI's Request
 Once the AI responds with requested directives:
@@ -70,123 +78,101 @@ Once the AI responds with requested directives:
    ```bash
    textify load -ci -c
    ```
-   *Your clipboard is immediately replaced with the requested line ranges, formatted and ready to paste!*
-2. **File Workflow:** Or save the response into `request.txt` and run:
+   *Your clipboard is immediately replaced with the requested line ranges, formatted and ready to paste back into the chat!*
+
+### Stage 3: Apply the AI's Solution
+When the AI provides its solution:
+1. Click "Copy" on the AI's response.
+2. Run:
    ```bash
-   textify load -c
+   textify patch -ci
    ```
+   *(Or preview first with `textify patch -ci --dry-run`)*
 
 ---
 
-## 📋 Comprehensive Request Directives (No Guessing!)
+## 🩹 Patch Directives & Patcher Format
 
-Textify supports intuitive, pattern-based requests so neither you nor the LLM has to guess line ranges in large files:
+Textify's patch engine supports surgical, robust directives. Conversational text and markdown wrappers outside the tags are automatically ignored.
 
-### 1. Find by Keyword with Context (`find` / `around` / `context`)
-Ideal when you know what code construct you are looking for inside a file:
+### 1. Create or Overwrite a File: `<file>`
 ```xml
-<request>
-  <!-- Finds 'case *PromoteExpr:' and returns 20 lines of context around it -->
-  <file path="pkg/compiler/codegen_expr.go" find="case *PromoteExpr:" context="20" />
-</request>
+<file path="cmd/app/main.go">
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, World!")
+}
+</file>
 ```
 
-### 2. Block Extraction (`from` ... `to`)
-Extracts a complete block or handler from a starting pattern to a stopping delimiter:
+### 2. AST-Exact Symbol Replacement (`symbol="..."`)
 ```xml
-<request>
-  <!-- Grabs the entire AST handler from 'case *PromoteExpr:' down to the next case -->
-  <file path="pkg/compiler/typechecker_expr.go" from="case *PromoteExpr:" to="case *" />
-</request>
+<replace path="pkg/compiler/codegen.go" symbol="inferExpr">
+<with>
+func inferExpr(ctx *Context, expr Expr) Type {
+    return ctx.Resolve(expr)
+}
+</with>
+</replace>
+
+<!-- Disambiguate receiver methods -->
+<replace path="pkg/server/server.go" symbol="Server.Start">
+<with>
+func (s *Server) Start() error {
+    return s.listener.Accept()
+}
+</with>
+</replace>
 ```
 
-### 3. Project-Wide Grep (`<grep pattern="..." />`)
-Finds every occurrence across the entire codebase with surrounding context lines:
+### 3. Search Block with Wildcards / Ellipsis (`...`)
 ```xml
-<request>
-  <!-- Finds all occurrences of PromoteExpr across all project files -->
-  <grep pattern="PromoteExpr" context="10" />
-
-  <!-- Restrict search to specific file extensions -->
-  <grep pattern="ube_arena_enter" glob="*.h" context="15" />
-</request>
+<replace path="pkg/config/config.go">
+<search>
+type Config struct {
+    ...
+    Timeout int
+    ...
+}
+</search>
+<with>
+type Config struct {
+    ...
+    Timeout int
+    Retries int
+    ...
+}
+</with>
+</replace>
 ```
 
-### 4. Symbol Extraction (`symbol` / `symbols`)
-Extracts an entire function, method, struct, or enum by name:
+### 4. Anchor Insertions (`after="..."` or `before="..."`)
 ```xml
-<request>
-  <file path="pkg/compiler/typechecker_expr.go" symbol="inferExpr" />
-</request>
+<replace path="pkg/api/server.go" after="router := gin.Default()">
+<with>
+    router.Use(cors.Default())
+</with>
+</replace>
 ```
 
-### 5. Explicit Line Ranges (`lines`)
-When line numbers are already known from Stage 1 signatures:
+### 5. Block Replacement (`from="..." to="..."`)
 ```xml
-<request>
-  <!-- Single line range -->
-  <file path="pkg/compiler/ast.go" lines="50-120" />
-
-  <!-- Multiple line ranges -->
-  <file path="pkg/compiler/typechecker.go" lines="10-35, 120-160" />
-
-  <!-- Open-ended range to EOF -->
-  <file path="pkg/compiler/codegen.go" lines="100:" />
-</request>
+<replace path="pkg/compiler/typechecker.go" from="case *PromoteExpr:" to="case *">
+<with>
+case *PromoteExpr:
+    val := e.Value
+    genPromote(val)
+case *
+</with>
+</replace>
 ```
 
-### 6. AST-Exact Definitions & Execution Flow (`<def>`)
-For Go and TypeScript/JavaScript projects, Textify can parse declarations directly
-and return the exact line range instead of guessing from text patterns:
-
+### 6. Delete a File: `<delete />`
 ```xml
-<request>
-  <!-- Exact function, method, struct, class, interface, or type definition -->
-  <def name="handleRequest" />
-  <def name="UserConfig" />
-
-  <!-- Include an execution flow: funcA() -> funcB() -> funcC() -->
-  <def name="handleRequest" trace="true" />
-
-  <!-- Also works as a file attribute; file is used as an optional filter -->
-  <file path="src/service.ts" def="UserService" trace="true" />
-</request>
-```
-
-Structs/classes trace their attached methods and type dependency hierarchy, while
-functions/methods trace their call chain. Markdown bullets `- def: Foo` and
-`- trace: Foo` are supported too.
-
----
-
-## 🧭 Instant CLI Definition & Trace
-
-```bash
-# Print the exact definition with line numbers
-textify def handleRequest
-
-# Include the execution flow (funcA() -> funcB() -> funcC())
-textify def handleRequest --trace
-
-# Trace a function or struct/class dependency hierarchy
-textify trace UserService --lang ts
-
-# Limit indexing to Go files and copy the result to the clipboard
-textify def Server --lang go --trace -c
-```
-
----
-
-## 🔍 Instant CLI Grep (`textify grep`)
-
-You can also search your codebase directly from the CLI:
-
-```bash
-# Search for keyword and copy matches with 5 context lines directly to clipboard
-textify grep "PromoteExpr" -C 5 -c
-
-# Restrict grep to Go files and print to terminal
-textify grep "ube_arena_enter" --glob "*.go" -C 3
+<delete path="path/to/obsolete_file.go" />
 ```
 
 ---
@@ -204,29 +190,17 @@ textify grep "ube_arena_enter" --glob "*.go" -C 3
 | `textify def <symbol>` | Extracts an AST-exact function/struct/class definition (Go/TypeScript). |
 | `textify trace <symbol>` | Traces a function call flow or a struct/class dependency hierarchy. |
 | `textify load [file] [flags]` | Extracts requested files, slices, searches, or symbols. |
+| `textify patch [file] [flags]` | Safely applies multi-file LLM patches (atomic two-pass VFS). |
 | `textify prompt` | Prints copy-pasteable instructions for the LLM. |
 | `textify version` | Prints current version. |
 | `textify help` | Shows CLI usage and available options. |
 
-### `textify load` Flags
+### `textify patch` Flags
 
 | Flag | Shorthand | Default | Description |
 | :--- | :---: | :---: | :--- |
-| `--clip-in` | `-ci` | `false` | Reads request directly from system clipboard. |
-| `--clip` | `-c` | `false` | Copies output slices directly to system clipboard. |
-| `--format` | | `raw` | Output format: `raw`, `markdown`, or `xml`. |
-| `--stdout` | | `false` | Streams output directly to standard output (for piping). |
-| `--no-redact` | | `false` | Disables automated scrubbing of sensitive tokens/keys. |
-| `-o <file>` | | *(config)* | Override output destination filename. |
-
-### `textify def` / `textify trace` Flags
-
-| Flag | Shorthand | Default | Description |
-| :--- | :---: | :---: | :--- |
-| `--lang` | | `all` | Languages to index: `go`, `ts`, `js`, or a comma-separated list. |
-| `--depth` | | `5` | Maximum trace depth. |
-| `--trace` | | `false` | Include execution flow with `def`. |
-| `--clip` | `-c` | `false` | Copy output directly to system clipboard. |
+| `--dry-run` | `-n` | `false` | Validate and preview changes without modifying files on disk. |
+| `--clip-in` | `-ci` | `false` | Read patch directly from system clipboard. |
 
 ---
 
