@@ -375,3 +375,175 @@ func fileMatches(symbolFile, requested string) bool {
 	return strings.HasSuffix(sym, "/"+strings.TrimPrefix(req, "/")) ||
 		strings.HasSuffix(req, "/"+strings.TrimPrefix(sym, "/"))
 }
+
+// TraceDeep recursively extracts callee function bodies and referenced types up to maxDepth.
+func (idx *CodebaseIndex) TraceDeep(rootSymbol string, maxDepth int) *DeepTraceResult {
+	if maxDepth <= 0 {
+		maxDepth = 2
+	}
+	matches := idx.FindDefinition(rootSymbol, "")
+	if len(matches) == 0 {
+		return nil
+	}
+	root := matches[0]
+
+	res := &DeepTraceResult{
+		RootSymbol: root,
+	}
+
+	visitedCalls := make(map[string]bool)
+	visitedCallees := make(map[string]bool)
+	visitedTypes := make(map[string]bool)
+
+	var dfs func(current Symbol, depth int)
+	dfs = func(current Symbol, depth int) {
+		name := current.FullName()
+		res.CallGraph = append(res.CallGraph, fmt.Sprintf("%s()", name))
+
+		for _, ref := range current.References {
+			cRef := cleanRefName(ref)
+			if cRef == "" || visitedTypes[cRef] {
+				continue
+			}
+			visitedTypes[cRef] = true
+			typeDefs := idx.FindDefinition(cRef, "")
+			for _, td := range typeDefs {
+				if td.IsTypeKind() {
+					res.Types = append(res.Types, td)
+				}
+			}
+		}
+
+		if depth >= maxDepth {
+			return
+		}
+
+		for _, call := range current.Calls {
+			callName := call
+			if strings.HasPrefix(call, "this.") && current.Receiver != "" {
+				callName = cleanReceiverName(current.Receiver) + "." + strings.TrimPrefix(call, "this.")
+			}
+			callees := idx.FindDefinition(callName, "")
+			if len(callees) == 0 && current.Receiver != "" && strings.Contains(callName, ".") {
+				methodName := callName[strings.LastIndex(callName, ".")+1:]
+				callees = idx.FindDefinition(cleanReceiverName(current.Receiver)+"."+methodName, "")
+			}
+
+			if len(callees) > 0 {
+				target := callees[0]
+				key := fmt.Sprintf("%s:%d", target.File, target.StartLine)
+				if !visitedCallees[key] {
+					visitedCallees[key] = true
+					res.Callees = append(res.Callees, DeepTraceNode{
+						Symbol: target,
+						Depth:  depth + 1,
+					})
+				}
+				if !visitedCalls[key] {
+					visitedCalls[key] = true
+					dfs(target, depth+1)
+				}
+			}
+		}
+	}
+
+	visitedCallees[fmt.Sprintf("%s:%d", root.File, root.StartLine)] = true
+	dfs(root, 1)
+	return res
+}
+
+// FindStructMethods retrieves methods attached to a struct or class by name.
+func (idx *CodebaseIndex) FindStructMethods(structName string, methodNames []string) []Symbol {
+	var methods []Symbol
+	wanted := make(map[string]bool)
+	for _, m := range methodNames {
+		wanted[cleanName(m)] = true
+	}
+
+	for _, sym := range idx.Symbols {
+		if sym.Kind == KindMethod && receiverMatches(sym.Receiver, structName) {
+			if len(wanted) == 0 || wanted[sym.Name] {
+				methods = append(methods, sym)
+			}
+		}
+	}
+
+	sort.Slice(methods, func(i, j int) bool {
+		if methods[i].File == methods[j].File {
+			return methods[i].StartLine < methods[j].StartLine
+		}
+		return methods[i].File < methods[j].File
+	})
+
+	return methods
+}
+
+// FindXRefs finds cross-references for a symbol across all indexed files.
+func (idx *CodebaseIndex) FindXRefs(symbol, action, rootPath string) []XRefResult {
+	cleanSym := cleanRefName(symbol)
+	var results []XRefResult
+	if cleanSym == "" {
+		return results
+	}
+
+	seenFiles := make(map[string]bool)
+	for _, sym := range idx.Symbols {
+		seenFiles[sym.File] = true
+	}
+
+	for fileRel := range seenFiles {
+		absPath := filepath.Join(rootPath, filepath.FromSlash(fileRel))
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			if strings.Contains(line, cleanSym) {
+				st := i - 2
+				if st < 0 {
+					st = 0
+				}
+				en := i + 3
+				if en > len(lines) {
+					en = len(lines)
+				}
+				var ctx strings.Builder
+				for j := st; j < en; j++ {
+					prefix := "  "
+					if j == i {
+						prefix = "> "
+					}
+					ctx.WriteString(fmt.Sprintf("%s%5d | %s\n", prefix, j+1, lines[j]))
+				}
+
+				matchAction := "read"
+				trimmed := strings.TrimSpace(line)
+				if strings.Contains(trimmed, ":=") || strings.Contains(trimmed, "=") || strings.Contains(trimmed, "var ") {
+					matchAction = "write"
+				} else if strings.Contains(trimmed, cleanSym+"(") {
+					matchAction = "call"
+				}
+
+				if action == "all" || action == "" || action == matchAction {
+					results = append(results, XRefResult{
+						File:     fileRel,
+						Line:     i + 1,
+						Action:   matchAction,
+						LineText: trimmed,
+						Context:  strings.TrimRight(ctx.String(), "\n"),
+					})
+				}
+			}
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].File == results[j].File {
+			return results[i].Line < results[j].Line
+		}
+		return results[i].File < results[j].File
+	})
+
+	return results
+}

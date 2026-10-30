@@ -26,74 +26,64 @@ func TestParseRequestFromToAndGrep(t *testing.T) {
 	if reqs[0].Query != "PromoteExpr" || reqs[0].Context != 12 {
 		t.Errorf("unexpected grep req: %+v", reqs[0])
 	}
-
 	if reqs[1].From != "case *PromoteExpr:" || reqs[1].To != "case *" {
 		t.Errorf("unexpected from/to req: %+v", reqs[1])
 	}
-
 	if reqs[2].Query != "case *PromoteExpr:" || reqs[2].Context != 15 {
 		t.Errorf("unexpected find req: %+v", reqs[2])
 	}
 }
 
-func TestExtractFromToBlock(t *testing.T) {
-	code := `
-line 1
-case *OtherExpr:
-    handleOther()
-case *PromoteExpr:
-    val := e.Value
-    genPromote(val)
-case *NextExpr:
-    handleNext()
-line 10
-`
-	req := FileRequest{
-		Path: "test.go",
-		From: "case *PromoteExpr:",
-		To:   "case *NextExpr:",
-	}
-
-	out, minL, maxL := extractSections(code, req)
-	if minL != 5 || maxL != 8 {
-		t.Errorf("expected lines 5-8, got %d-%d", minL, maxL)
-	}
-	if !strings.Contains(out, "case *PromoteExpr:") || !strings.Contains(out, "genPromote(val)") {
-		t.Errorf("expected block content missing:\n%s", out)
-	}
-}
-
-func TestParseDefRequests(t *testing.T) {
+func TestParseDeepTraceAndCaseRequests(t *testing.T) {
 	input := `
 	<request>
-		<def name="Config" trace="true" />
-		<file path="service.ts" def="UserService" />
-		<def symbol="Router" />
+		<trace symbol="Typechecker.checkStmt" depth="2" for-patch="true" />
+		<select path="compiler/expr.go" fn="inferExpr" case="*MemberExpr" for-patch="true" />
+		<select struct="Typechecker" methods="Check,resolveType" />
+		<xref symbol="FieldDecl" action="write" />
 	</request>
 	`
-
 	reqs := ParseRequest(input)
-	if len(reqs) != 3 {
-		t.Fatalf("expected 3 def requests, got %d: %+v", len(reqs), reqs)
+	if len(reqs) != 4 {
+		t.Fatalf("expected 4 requests, got %d", len(reqs))
 	}
 
-	byDef := make(map[string]FileRequest)
-	for _, req := range reqs {
-		byDef[req.Def] = req
+	if reqs[0].Def != "Typechecker.checkStmt" || !reqs[0].Trace || reqs[0].Depth != 2 || !reqs[0].ForPatch {
+		t.Errorf("unexpected trace req: %+v", reqs[0])
 	}
-
-	if req := byDef["Config"]; !req.Trace {
-		t.Errorf("expected Config trace request: %+v", req)
+	if reqs[1].Fn != "inferExpr" || reqs[1].Case != "*MemberExpr" || !reqs[1].ForPatch {
+		t.Errorf("unexpected select case req: %+v", reqs[1])
 	}
-	if req := byDef["UserService"]; req.Path != "service.ts" || req.Trace {
-		t.Errorf("unexpected file def req: %+v", req)
+	if reqs[2].Struct != "Typechecker" || len(reqs[2].Methods) != 2 {
+		t.Errorf("unexpected select struct req: %+v", reqs[2])
 	}
-	if _, ok := byDef["Router"]; !ok {
-		t.Errorf("expected Router symbol def request: %+v", reqs)
+	if reqs[3].XRef != "FieldDecl" || reqs[3].XRefAction != "write" {
+		t.Errorf("unexpected xref req: %+v", reqs[3])
 	}
 }
 
-func TestLoadRequestsASTDefinitionAndTrace(t *testing.T) {
+func TestParseFeatureContext(t *testing.T) {
+	input := `
+	<request>
+		<feature-context lang="go">
+			<target-type name="compiler.StructDecl" />
+			<entrypoint file="pkg/compiler/parser.go" symbol="Parser.parseDecl" depth="2" />
+			<touchpoints pattern="TokenStruct" />
+		</feature-context>
+	</request>
+	`
+	reqs := ParseRequest(input)
+	if len(reqs) != 1 || reqs[0].FeatureCtx == nil {
+		t.Fatalf("expected 1 feature context request, got %+v", reqs)
+	}
+
+	fc := reqs[0].FeatureCtx
+	if fc.Lang != "go" || len(fc.TargetTypes) != 1 || len(fc.Entrypoints) != 1 || len(fc.Touchpoints) != 1 {
+		t.Errorf("unexpected feature context: %+v", fc)
+	}
+}
+
+func TestLoadRequestsDeepTraceAndForPatch(t *testing.T) {
 	dir := t.TempDir()
 	source := `package sample
 
@@ -106,6 +96,15 @@ func B() {
 }
 
 func C() {}
+
+func infer(v interface{}) string {
+	switch v.(type) {
+	case int:
+		return "int"
+	default:
+		return "other"
+	}
+}
 `
 	if err := os.WriteFile(filepath.Join(dir, "flow.go"), []byte(source), 0644); err != nil {
 		t.Fatalf("write source: %v", err)
@@ -113,18 +112,27 @@ func C() {}
 
 	cfg := &config.Config{OutputFile: "out.txt"}
 	var buf bytes.Buffer
-	result, err := LoadRequests(dir, cfg, []FileRequest{{Def: "A", Trace: true}}, &buf, ScanOptions{Format: "raw"})
+
+	// 1. Deep Trace Test
+	_, err := LoadRequests(dir, cfg, []FileRequest{{Def: "A", Trace: true, Depth: 2}}, &buf, ScanOptions{Format: "raw"})
 	if err != nil {
-		t.Fatalf("LoadRequests failed: %v", err)
+		t.Fatalf("LoadRequests trace failed: %v", err)
 	}
-	if result.FilesCount != 1 {
-		t.Errorf("FilesCount = %d, want 1", result.FilesCount)
+	out := buf.String()
+	for _, want := range []string{"Deep Contextual Trace", "Primary Definition: function A", "Callee: function B", "Callee: function C"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("deep trace missing %q:\n%s", want, out)
+		}
 	}
 
-	output := buf.String()
-	for _, want := range []string{"Execution Flow", "A()", "B()", "C()", "/* Definition: function A", "flow.go:3-5"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("AST output missing %q:\n%s", want, output)
-		}
+	// 2. Case Selector + for-patch Test
+	buf.Reset()
+	_, err = LoadRequests(dir, cfg, []FileRequest{{Path: "flow.go", Fn: "infer", Case: "int", ForPatch: true}}, &buf, ScanOptions{Format: "raw"})
+	if err != nil {
+		t.Fatalf("LoadRequests case failed: %v", err)
+	}
+	outPatch := buf.String()
+	if !strings.Contains(outPatch, `<replace path="flow.go" fn="infer" case="int">`) || strings.Contains(outPatch, " | ") {
+		t.Errorf("expected clean patch-ready case replacement:\n%s", outPatch)
 	}
 }

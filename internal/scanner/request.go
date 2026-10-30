@@ -22,47 +22,78 @@ type LineRange struct {
 	End   int // 0 means through end of file
 }
 
+// EntrypointReq describes an entrypoint symbol inside a feature-context query.
+type EntrypointReq struct {
+	File   string
+	Symbol string
+	Depth  int
+}
+
+// FeatureContextReq represents a 360-degree composite query bundle.
+type FeatureContextReq struct {
+	Lang        string
+	TargetTypes []string
+	Entrypoints []EntrypointReq
+	Touchpoints []string
+	ForPatch    bool
+}
+
 // FileRequest describes a target file and specific sub-slices or queries requested.
 type FileRequest struct {
-	Path    string
-	Ranges  []LineRange
-	Start   int // Legacy compatibility (first range start)
-	End     int // Legacy compatibility (first range end)
-	Symbols []string
-	Query   string // Text or regex pattern to search for
-	Context int    // Context lines around query matches (default 10)
-	Glob    string // Glob pattern to match multiple files
-	From    string // Start pattern for block extraction
-	To      string // End pattern for block extraction
-	Anchor  string // Anchor pattern
-	Def     string // Exact symbol definition requested via AST
-	Trace   bool   // Trace execution flow funcA() -> funcB() -> funcC()
+	Path       string
+	Ranges     []LineRange
+	Start      int // Legacy compatibility (first range start)
+	End        int // Legacy compatibility (first range end)
+	Symbols    []string
+	Query      string // Text or regex pattern to search for
+	Context    int    // Context lines around query matches (default 10)
+	Glob       string // Glob pattern to match multiple files
+	From       string // Start pattern for block extraction
+	To         string // End pattern for block extraction
+	Anchor     string // Anchor pattern
+	Def        string // Exact symbol definition requested via AST
+	Trace      bool   // Trace execution flow
+	Depth      int    // Trace depth
+	Case       string // AST switch-case branch selector
+	Fn         string // Function containing the switch-case
+	Struct     string // Struct name for method selection
+	Methods    []string
+	XRef       string // Cross-reference symbol
+	XRefAction string // "write", "read", "call", "all"
+	ForPatch   bool   // Output ready-to-use block without line numbers
+	FeatureCtx *FeatureContextReq
 }
 
 var (
-	// Matches XML-style file/slice tags
-	xmlTagRegex = regexp.MustCompile(`(?i)<(?:file|slice|read|get)\s+([^>]+?)(?:/>|>.*?</(?:file|slice|read|get)>|>)`)
+	xmlTagRegex            = regexp.MustCompile(`(?i)<(?:file|slice|read|get)\s+([^>]+?)(?:/>|>.*?</(?:file|slice|read|get)>|>)`)
+	xmlGrepRegex           = regexp.MustCompile(`(?i)<(?:grep|search|find)\s+([^>]+?)(?:/>|>.*?</(?:grep|search|find)>|>)`)
+	xmlDefRegex            = regexp.MustCompile(`(?i)<(?:def|definition)\s+([^>]+?)(?:/>|>.*?</(?:def|definition)>|>)`)
+	xmlTraceRegex          = regexp.MustCompile(`(?i)<(?:trace|flow)\s+([^>]+?)(?:/>|>.*?</(?:trace|flow)>|>)`)
+	xmlSelectRegex         = regexp.MustCompile(`(?i)<(?:select|case)\s+([^>]+?)(?:/>|>.*?</(?:select|case)>|>)`)
+	xmlXrefRegex           = regexp.MustCompile(`(?i)<(?:xref|deps-of|references)\s+([^>]+?)(?:/>|>.*?</(?:xref|deps-of|references)>|>)`)
+	xmlFeatureContextRegex = regexp.MustCompile(`(?is)<feature-context(?:\s+([^>]*))?>(.*?)</feature-context>`)
 
-	// Matches XML-style project-wide grep/search tags: <grep pattern="foo" context="10" />
-	xmlGrepRegex = regexp.MustCompile(`(?i)<(?:grep|search|find)\s+([^>]+?)(?:/>|>.*?</(?:grep|search|find)>|>)`)
+	xmlAttrTrace    = regexp.MustCompile(`(?i)\btrace=["']?(true|false|1|0)["']?`)
+	xmlAttrName     = regexp.MustCompile(`(?i)\b(?:name|symbol|struct|func|id|pattern)=["']([^"']+)["']`)
+	xmlAttrDef      = regexp.MustCompile(`(?i)\b(?:def|definition)=["']([^"']+)["']`)
+	xmlAttrPath     = regexp.MustCompile(`(?i)\b(?:path|file|src)=["']([^"']+)["']`)
+	xmlAttrLines    = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
+	xmlAttrSymbols  = regexp.MustCompile(`(?i)\bsymbols?=["']([^"']+)["']`)
+	xmlAttrSearch   = regexp.MustCompile(`(?i)\b(?:search|grep|query|pattern|find|around)=["']([^"']+)["']`)
+	xmlAttrFrom     = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	xmlAttrTo       = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
+	xmlAttrAnchor   = regexp.MustCompile(`(?i)\banchor=["']([^"']+)["']`)
+	xmlAttrContext  = regexp.MustCompile(`(?i)\bcontext=["'](\d+)["']`)
+	xmlAttrGlob     = regexp.MustCompile(`(?i)\bglob=["']([^"']+)["']`)
+	xmlAttrForPatch = regexp.MustCompile(`(?i)\b(?:for-patch|anchors|patch-ready)=["']?(true|false|1|0)["']?`)
+	xmlAttrCase     = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
+	xmlAttrFn       = regexp.MustCompile(`(?i)\b(?:fn|func|function|method)=["']([^"']+)["']`)
+	xmlAttrStruct   = regexp.MustCompile(`(?i)\b(?:struct|class)=["']([^"']+)["']`)
+	xmlAttrMethods  = regexp.MustCompile(`(?i)\bmethods=["']([^"']+)["']`)
+	xmlAttrDepth    = regexp.MustCompile(`(?i)\bdepth=["'](\d+)["']`)
+	xmlAttrLang     = regexp.MustCompile(`(?i)\blang(?:uage)?=["']([^"']+)["']`)
+	xmlAttrAction   = regexp.MustCompile(`(?i)\baction=["']([^"']+)["']`)
 
-	// Matches XML-style <def name="Foo" trace="true" /> tags
-	xmlDefRegex  = regexp.MustCompile(`(?i)<(?:def|definition)\s+([^>]+?)(?:/>|>.*?</(?:def|definition)>|>)`)
-	xmlAttrTrace = regexp.MustCompile(`(?i)\btrace=["']?(true|false|1|0)["']?`)
-	xmlAttrName  = regexp.MustCompile(`(?i)\b(?:name|symbol|struct|func|id)=["']([^"']+)["']`)
-	xmlAttrDef   = regexp.MustCompile(`(?i)\b(?:def|definition)=["']([^"']+)["']`)
-
-	xmlAttrPath    = regexp.MustCompile(`(?i)\b(?:path|file|src)=["']([^"']+)["']`)
-	xmlAttrLines   = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
-	xmlAttrSymbols = regexp.MustCompile(`(?i)\bsymbols?=["']([^"']+)["']`)
-	xmlAttrSearch  = regexp.MustCompile(`(?i)\b(?:search|grep|query|pattern|find|around)=["']([^"']+)["']`)
-	xmlAttrFrom    = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
-	xmlAttrTo      = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
-	xmlAttrAnchor  = regexp.MustCompile(`(?i)\banchor=["']([^"']+)["']`)
-	xmlAttrContext = regexp.MustCompile(`(?i)\bcontext=["'](\d+)["']`)
-	xmlAttrGlob    = regexp.MustCompile(`(?i)\bglob=["']([^"']+)["']`)
-
-	// Markdown bullet patterns like: - path/to/file.go:50-120 or - grep: "keyword"
 	mdLinePattern = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+\.)(?:\s+\[[ xX]\])?\s+` + "`?" + `([^\s:` + "`" + `]+)` + "`?" + `(?:\s*[:(]\s*([^\r\n)]+)\)?)?`)
 )
 
@@ -117,14 +148,196 @@ func ParseLineRanges(s string) []LineRange {
 	return ranges
 }
 
-// ParseRequest parses an LLM response containing file or grep requests.
+// ParseRequest parses an LLM response containing targeted requests.
 func ParseRequest(input string) []FileRequest {
 	var requests []FileRequest
 	seen := make(map[string]bool)
 
-	// 0. <def name="..." file="..." trace="true" /> tags
-	defMatches := xmlDefRegex.FindAllStringSubmatch(input, -1)
-	for _, m := range defMatches {
+	// 1. <feature-context> tags
+	for _, m := range xmlFeatureContextRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		body := m[2]
+		lang := "all"
+		if lMatch := xmlAttrLang.FindStringSubmatch(attrs); len(lMatch) >= 2 {
+			lang = lMatch[1]
+		}
+		forPatch := false
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			forPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+		fc := &FeatureContextReq{
+			Lang:     lang,
+			ForPatch: forPatch,
+		}
+
+		targetTypeRe := regexp.MustCompile(`(?i)<(?:target-type|target)\s+([^>]+?)(?:/>|>)`)
+		for _, tm := range targetTypeRe.FindAllStringSubmatch(body, -1) {
+			if nm := xmlAttrName.FindStringSubmatch(tm[1]); len(nm) >= 2 {
+				fc.TargetTypes = append(fc.TargetTypes, strings.TrimSpace(nm[1]))
+			}
+		}
+
+		epRe := regexp.MustCompile(`(?i)<entrypoint\s+([^>]+?)(?:/>|>)`)
+		for _, em := range epRe.FindAllStringSubmatch(body, -1) {
+			epAttrs := em[1]
+			epFile := ""
+			if pm := xmlAttrPath.FindStringSubmatch(epAttrs); len(pm) >= 2 {
+				epFile = filepath.ToSlash(strings.TrimSpace(pm[1]))
+			}
+			epSym := ""
+			if sm := xmlAttrSymbols.FindStringSubmatch(epAttrs); len(sm) >= 2 {
+				epSym = strings.TrimSpace(sm[1])
+			} else if nm := xmlAttrName.FindStringSubmatch(epAttrs); len(nm) >= 2 {
+				epSym = strings.TrimSpace(nm[1])
+			}
+			epDepth := 2
+			if dm := xmlAttrDepth.FindStringSubmatch(epAttrs); len(dm) >= 2 {
+				epDepth, _ = strconv.Atoi(dm[1])
+			}
+			if epSym != "" {
+				fc.Entrypoints = append(fc.Entrypoints, EntrypointReq{
+					File:   epFile,
+					Symbol: epSym,
+					Depth:  epDepth,
+				})
+			}
+		}
+
+		tpRe := regexp.MustCompile(`(?i)<(?:touchpoints|touchpoint)\s+([^>]+?)(?:/>|>)`)
+		for _, tm := range tpRe.FindAllStringSubmatch(body, -1) {
+			if sm := xmlAttrSearch.FindStringSubmatch(tm[1]); len(sm) >= 2 {
+				fc.Touchpoints = append(fc.Touchpoints, strings.TrimSpace(sm[1]))
+			} else if nm := xmlAttrName.FindStringSubmatch(tm[1]); len(nm) >= 2 {
+				fc.Touchpoints = append(fc.Touchpoints, strings.TrimSpace(nm[1]))
+			}
+		}
+
+		requests = append(requests, FileRequest{FeatureCtx: fc})
+	}
+
+	// 2. <trace ... /> tags
+	for _, m := range xmlTraceRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		sym := ""
+		if sm := xmlAttrSymbols.FindStringSubmatch(attrs); len(sm) >= 2 {
+			sym = strings.TrimSpace(sm[1])
+		} else if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			sym = strings.TrimSpace(nm[1])
+		}
+		if sym == "" {
+			continue
+		}
+
+		depth := 2
+		if dm := xmlAttrDepth.FindStringSubmatch(attrs); len(dm) >= 2 {
+			depth, _ = strconv.Atoi(dm[1])
+		}
+
+		forPatch := false
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			forPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+
+		pathVal := ""
+		if pm := xmlAttrPath.FindStringSubmatch(attrs); len(pm) >= 2 {
+			pathVal = filepath.ToSlash(strings.TrimSpace(pm[1]))
+		}
+
+		req := FileRequest{
+			Path:     pathVal,
+			Def:      sym,
+			Trace:    true,
+			Depth:    depth,
+			ForPatch: forPatch,
+		}
+		key := fmt.Sprintf("TRACE|%s|%d|%t", sym, depth, forPatch)
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, req)
+		}
+	}
+
+	// 3. <select ... /> or <case ... /> tags
+	for _, m := range xmlSelectRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		pathVal := ""
+		if pm := xmlAttrPath.FindStringSubmatch(attrs); len(pm) >= 2 {
+			pathVal = filepath.ToSlash(strings.TrimSpace(pm[1]))
+		}
+		fnVal := ""
+		if fm := xmlAttrFn.FindStringSubmatch(attrs); len(fm) >= 2 {
+			fnVal = strings.TrimSpace(fm[1])
+		}
+		caseVal := ""
+		if cm := xmlAttrCase.FindStringSubmatch(attrs); len(cm) >= 2 {
+			caseVal = strings.TrimSpace(cm[1])
+		}
+		structVal := ""
+		if sm := xmlAttrStruct.FindStringSubmatch(attrs); len(sm) >= 2 {
+			structVal = strings.TrimSpace(sm[1])
+		}
+		var methods []string
+		if mm := xmlAttrMethods.FindStringSubmatch(attrs); len(mm) >= 2 {
+			for _, part := range strings.Split(mm[1], ",") {
+				if p := strings.TrimSpace(part); p != "" {
+					methods = append(methods, p)
+				}
+			}
+		}
+		forPatch := false
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			forPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+
+		req := FileRequest{
+			Path:     pathVal,
+			Fn:       fnVal,
+			Case:     caseVal,
+			Struct:   structVal,
+			Methods:  methods,
+			ForPatch: forPatch,
+		}
+		key := fmt.Sprintf("SELECT|%s|%s|%s|%s|%v|%t", pathVal, fnVal, caseVal, structVal, methods, forPatch)
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, req)
+		}
+	}
+
+	// 4. <xref ... /> or <deps-of ... /> tags
+	for _, m := range xmlXrefRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		sym := ""
+		if sm := xmlAttrSymbols.FindStringSubmatch(attrs); len(sm) >= 2 {
+			sym = strings.TrimSpace(sm[1])
+		} else if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			sym = strings.TrimSpace(nm[1])
+		}
+		if sym == "" {
+			continue
+		}
+		action := "all"
+		if am := xmlAttrAction.FindStringSubmatch(attrs); len(am) >= 2 {
+			action = strings.ToLower(strings.TrimSpace(am[1]))
+		}
+		ctx := 2
+		if cm := xmlAttrContext.FindStringSubmatch(attrs); len(cm) >= 2 {
+			ctx, _ = strconv.Atoi(cm[1])
+		}
+		req := FileRequest{
+			XRef:       sym,
+			XRefAction: action,
+			Context:    ctx,
+		}
+		key := fmt.Sprintf("XREF|%s|%s|%d", sym, action, ctx)
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, req)
+		}
+	}
+
+	// 5. <def name="..." trace="true" /> tags
+	for _, m := range xmlDefRegex.FindAllStringSubmatch(input, -1) {
 		attrs := m[1]
 		nameMatch := xmlAttrName.FindStringSubmatch(attrs)
 		if len(nameMatch) < 2 {
@@ -140,22 +353,32 @@ func ParseRequest(input string) []FileRequest {
 		if traceMatch := xmlAttrTrace.FindStringSubmatch(attrs); len(traceMatch) >= 2 {
 			traceVal = traceMatch[1] == "true" || traceMatch[1] == "1"
 		}
+		depth := 2
+		if dm := xmlAttrDepth.FindStringSubmatch(attrs); len(dm) >= 2 {
+			depth, _ = strconv.Atoi(dm[1])
+		}
+
+		forPatch := false
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			forPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
 
 		req := FileRequest{
-			Path:  pathVal,
-			Def:   strings.TrimSpace(nameMatch[1]),
-			Trace: traceVal,
+			Path:     pathVal,
+			Def:      strings.TrimSpace(nameMatch[1]),
+			Trace:    traceVal,
+			Depth:    depth,
+			ForPatch: forPatch,
 		}
-		key := fmt.Sprintf("DEF|%s|%s|%t", req.Def, req.Path, req.Trace)
+		key := fmt.Sprintf("DEF|%s|%s|%t|%t", req.Def, req.Path, req.Trace, req.ForPatch)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
 		}
 	}
 
-	// 1. Project-wide <grep ... /> or <search ... /> tags
-	grepMatches := xmlGrepRegex.FindAllStringSubmatch(input, -1)
-	for _, m := range grepMatches {
+	// 6. Project-wide <grep ... /> or <search ... /> tags
+	for _, m := range xmlGrepRegex.FindAllStringSubmatch(input, -1) {
 		attrs := m[1]
 		searchMatch := xmlAttrSearch.FindStringSubmatch(attrs)
 		if len(searchMatch) < 2 {
@@ -172,22 +395,27 @@ func ParseRequest(input string) []FileRequest {
 			globVal = filepath.ToSlash(strings.TrimSpace(globMatch[1]))
 		}
 
-		req := FileRequest{
-			Query:   strings.TrimSpace(searchMatch[1]),
-			Context: ctx,
-			Glob:    globVal,
+		forPatch := false
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			forPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
 		}
 
-		key := fmt.Sprintf("GREP|%s|%d|%s", req.Query, req.Context, req.Glob)
+		req := FileRequest{
+			Query:    strings.TrimSpace(searchMatch[1]),
+			Context:  ctx,
+			Glob:     globVal,
+			ForPatch: forPatch,
+		}
+
+		key := fmt.Sprintf("GREP|%s|%d|%s|%t", req.Query, req.Context, req.Glob, req.ForPatch)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
 		}
 	}
 
-	// 2. File-specific <file ... /> or <slice ... /> tags
-	matches := xmlTagRegex.FindAllStringSubmatch(input, -1)
-	for _, m := range matches {
+	// 7. File-specific <file ... /> or <slice ... /> tags
+	for _, m := range xmlTagRegex.FindAllStringSubmatch(input, -1) {
 		attrs := m[1]
 		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
 		globMatch := xmlAttrGlob.FindStringSubmatch(attrs)
@@ -196,7 +424,6 @@ func ParseRequest(input string) []FileRequest {
 		if len(pathMatch) >= 2 {
 			targetPath = filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
 		}
-
 		targetGlob := ""
 		if len(globMatch) >= 2 {
 			targetGlob = filepath.ToSlash(strings.TrimSpace(globMatch[1]))
@@ -234,26 +461,34 @@ func ParseRequest(input string) []FileRequest {
 		if searchMatch := xmlAttrSearch.FindStringSubmatch(attrs); len(searchMatch) >= 2 {
 			req.Query = strings.TrimSpace(searchMatch[1])
 		}
-
 		if fromMatch := xmlAttrFrom.FindStringSubmatch(attrs); len(fromMatch) >= 2 {
 			req.From = strings.TrimSpace(fromMatch[1])
 		}
-
 		if toMatch := xmlAttrTo.FindStringSubmatch(attrs); len(toMatch) >= 2 {
 			req.To = strings.TrimSpace(toMatch[1])
 		}
-
 		if anchorMatch := xmlAttrAnchor.FindStringSubmatch(attrs); len(anchorMatch) >= 2 {
 			req.Anchor = strings.TrimSpace(anchorMatch[1])
 		}
-
 		if defMatch := xmlAttrDef.FindStringSubmatch(attrs); len(defMatch) >= 2 {
 			req.Def = strings.TrimSpace(defMatch[1])
 		}
 		if traceMatch := xmlAttrTrace.FindStringSubmatch(attrs); len(traceMatch) >= 2 {
 			req.Trace = traceMatch[1] == "true" || traceMatch[1] == "1"
 		}
-		// Allow <file path="..." symbol="Foo" trace="true" /> as an AST request.
+		if dm := xmlAttrDepth.FindStringSubmatch(attrs); len(dm) >= 2 {
+			req.Depth, _ = strconv.Atoi(dm[1])
+		}
+		if cm := xmlAttrCase.FindStringSubmatch(attrs); len(cm) >= 2 {
+			req.Case = strings.TrimSpace(cm[1])
+		}
+		if fm := xmlAttrFn.FindStringSubmatch(attrs); len(fm) >= 2 {
+			req.Fn = strings.TrimSpace(fm[1])
+		}
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			req.ForPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+
 		if req.Def == "" && req.Trace && len(req.Symbols) == 1 {
 			req.Def = req.Symbols[0]
 		}
@@ -264,7 +499,7 @@ func ParseRequest(input string) []FileRequest {
 		}
 		req.Context = ctx
 
-		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s|%s|%t", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor, req.Def, req.Trace)
+		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s|%s|%t|%s|%s|%t", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor, req.Def, req.Trace, req.Case, req.Fn, req.ForPatch)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
@@ -275,15 +510,13 @@ func ParseRequest(input string) []FileRequest {
 		return requests
 	}
 
-	// 3. Fallback to Markdown bullet lists
-	mdMatches := mdLinePattern.FindAllStringSubmatch(input, -1)
-	for _, m := range mdMatches {
+	// 8. Fallback to Markdown bullet lists
+	for _, m := range mdLinePattern.FindAllStringSubmatch(input, -1) {
 		p := filepath.ToSlash(strings.Trim(strings.TrimSpace(m[1]), "`'\""))
 		if strings.HasPrefix(p, "http") || strings.HasPrefix(p, "#") || p == "" {
 			continue
 		}
 
-		// Check for markdown bullet grep: - grep: "keyword"
 		if p == "grep" || p == "search" || p == "find" {
 			query := ""
 			if len(m) >= 3 && m[2] != "" {
@@ -300,7 +533,6 @@ func ParseRequest(input string) []FileRequest {
 			}
 		}
 
-		// Check for markdown bullet definitions/traces: - def: "Foo" / - trace: Foo
 		if p == "def" || p == "definition" || p == "trace" || p == "flow" {
 			name := ""
 			if len(m) >= 3 && m[2] != "" {
@@ -310,6 +542,7 @@ func ParseRequest(input string) []FileRequest {
 				req := FileRequest{
 					Def:   name,
 					Trace: p == "trace" || p == "flow",
+					Depth: 2,
 				}
 				key := fmt.Sprintf("DEF|%s|%t", req.Def, req.Trace)
 				if !seen[key] {
@@ -321,10 +554,8 @@ func ParseRequest(input string) []FileRequest {
 		}
 
 		req := FileRequest{Path: p, Context: 10}
-
 		if len(m) >= 3 && m[2] != "" {
 			detail := strings.TrimSpace(m[2])
-
 			switch {
 			case strings.HasPrefix(detail, "search:") || strings.HasPrefix(detail, "grep:") || strings.HasPrefix(detail, "find:"):
 				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
@@ -336,22 +567,9 @@ func ParseRequest(input string) []FileRequest {
 				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
 				req.Def = strings.Trim(val, `"' `)
 				req.Trace = true
-			case strings.HasPrefix(detail, "symbols:") || strings.HasPrefix(detail, "symbol:"):
-				val := strings.TrimSpace(detail[strings.Index(detail, ":")+1:])
-				for _, sym := range strings.Split(val, ",") {
-					req.Symbols = append(req.Symbols, strings.TrimSpace(sym))
-				}
-			case strings.HasPrefix(detail, "from:"):
-				// format: (from: "A", to: "B")
-				parts := strings.Split(detail, ",")
-				for _, part := range parts {
-					part = strings.TrimSpace(part)
-					if strings.HasPrefix(part, "from:") {
-						req.From = strings.Trim(strings.TrimSpace(part[5:]), `"' `)
-					} else if strings.HasPrefix(part, "to:") {
-						req.To = strings.Trim(strings.TrimSpace(part[3:]), `"' `)
-					}
-				}
+				req.Depth = 2
+			case strings.HasPrefix(detail, "case:"):
+				req.Case = strings.Trim(strings.TrimSpace(detail[5:]), `"' `)
 			default:
 				detail = strings.TrimPrefix(detail, "lines")
 				req.Ranges = ParseLineRanges(detail)
@@ -362,7 +580,7 @@ func ParseRequest(input string) []FileRequest {
 			}
 		}
 
-		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s|%s|%t", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor, req.Def, req.Trace)
+		key := fmt.Sprintf("%s|%v|%s|%s|%s|%s|%s|%s|%t|%s|%t", req.Path, req.Ranges, strings.Join(req.Symbols, ","), req.Query, req.From, req.To, req.Anchor, req.Def, req.Trace, req.Case, req.ForPatch)
 		if !seen[key] {
 			seen[key] = true
 			requests = append(requests, req)
@@ -372,7 +590,7 @@ func ParseRequest(input string) []FileRequest {
 	return requests
 }
 
-// LoadRequests reads the requested files, extracts line slices, searches, or symbols,
+// LoadRequests reads requested files, extracts line slices/searches/symbols,
 // applies formatting and secret redaction, and writes the output.
 func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, writer io.Writer, opts ScanOptions) (*ScanResult, error) {
 	bufWriter := bufio.NewWriter(writer)
@@ -388,32 +606,21 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 
 	result := &ScanResult{}
 
-	// Normalize trace requests that used symbol="..." without def="...".
-	for i := range requests {
-		if requests[i].Def == "" && requests[i].Trace && len(requests[i].Symbols) == 1 {
-			requests[i].Def = requests[i].Symbols[0]
-		}
-	}
-
-	// Build the AST index once if any request needs exact definitions or traces.
 	var astIndex *parser.CodebaseIndex
 	for _, req := range requests {
-		if req.Def != "" || req.Trace {
+		if req.Def != "" || req.Trace || req.Case != "" || req.Struct != "" || req.XRef != "" || req.FeatureCtx != nil {
 			astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
 			break
 		}
 	}
 
-	// Expand requests (globs or project-wide greps)
 	var expandedRequests []FileRequest
 	for _, req := range requests {
-		// AST definition/trace requests are resolved directly against the index.
-		if req.Def != "" || req.Trace {
+		if req.FeatureCtx != nil || req.XRef != "" || req.Def != "" || req.Trace || req.Case != "" || req.Struct != "" {
 			expandedRequests = append(expandedRequests, req)
 			continue
 		}
 
-		// Project-wide grep (no specific file path)
 		if req.Path == "" && req.Query != "" {
 			pattern := req.Glob
 			if pattern == "" {
@@ -429,7 +636,6 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 				if err != nil {
 					continue
 				}
-				// Only include file if it actually contains the query
 				if fileMatchesQuery(string(data), req.Query) {
 					clone := req
 					clone.Path = mf
@@ -439,7 +645,6 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 			continue
 		}
 
-		// Explicit glob path
 		if req.Glob != "" || strings.ContainsAny(req.Path, "*?[") {
 			pattern := req.Glob
 			if pattern == "" {
@@ -458,21 +663,111 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 	}
 
 	for _, req := range expandedRequests {
-		// AST-backed exact definition and optional execution flow trace.
+		// 1. Composite Feature Context Query
+		if req.FeatureCtx != nil {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages(req.FeatureCtx.Lang))
+			}
+			content := renderFeatureContext(astIndex, rootPath, req.FeatureCtx, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: [composite feature-context bundle]\n")
+			}
+			continue
+		}
+
+		// 2. Cross-Reference (XRef) Query
+		if req.XRef != "" {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			content := renderXRefs(astIndex, req.XRef, req.XRefAction, rootPath, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: xrefs for %q (action: %s)\n", req.XRef, req.XRefAction)
+			}
+			continue
+		}
+
+		// 3. AST Sub-Branch Case Selector
+		if req.Case != "" {
+			content, sLine, eLine, err := handleCaseRequest(rootPath, req)
+			if err != nil {
+				if !opts.Stdout {
+					fmt.Printf("⚠️ Warning: Case extraction failed: %v\n", err)
+				}
+				continue
+			}
+
+			if opts.RedactSecrets {
+				var count int
+				content, count = fileutil.RedactSecrets(content)
+				result.RedactedSecrets += count
+			}
+
+			formatted := ""
+			if req.ForPatch {
+				formatted = fmt.Sprintf("<!-- textify: AST case replacement block (ready for <replace>) -->\n<replace path=\"%s\" fn=\"%s\" case=\"%s\">\n<with>\n%s\n</with>\n</replace>\n\n", req.Path, req.Fn, req.Case, content)
+			} else {
+				formatted = renderFormattedEntry(req.Path, content, format, sLine, eLine)
+			}
+
+			n, writeErr := bufWriter.WriteString(formatted)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: %s (case: %s)\n", req.Path, req.Case)
+			}
+			continue
+		}
+
+		// 4. Struct Methods Selection
+		if req.Struct != "" && len(req.Methods) > 0 {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			content := renderStructMethods(astIndex, req, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: %s (methods: %s)\n", req.Struct, strings.Join(req.Methods, ", "))
+			}
+			continue
+		}
+
+		// 5. Deep Contextual Trace or Definition
 		if req.Def != "" {
 			if astIndex == nil {
-				var idxErr error
-				astIndex, idxErr = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
-				if idxErr != nil || astIndex == nil {
-					if !opts.Stdout {
-						fmt.Printf("⚠️ Warning: Could not build AST index: %v\n", idxErr)
-					}
-					continue
-				}
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			if astIndex == nil {
+				continue
 			}
 
 			rendered := buildASTContent(astIndex, req, opts.RedactSecrets)
-			formatted := renderFormattedEntry(rendered.label, rendered.content, format, rendered.startLine, rendered.endLine)
+			var formatted string
+			if req.ForPatch && !req.Trace {
+				formatted = fmt.Sprintf("<!-- textify: patch anchor block (ready for <replace>) -->\n<replace path=\"%s\" symbol=\"%s\">\n<with>\n%s\n</with>\n</replace>\n\n", rendered.label, req.Def, strings.TrimRight(rendered.content, "\n"))
+			} else {
+				formatted = renderFormattedEntry(rendered.label, rendered.content, format, rendered.startLine, rendered.endLine)
+			}
 
 			n, writeErr := bufWriter.WriteString(formatted)
 			if writeErr != nil {
@@ -486,17 +781,16 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 			if !opts.Stdout {
 				desc := fmt.Sprintf("definition: %s", req.Def)
 				if req.Trace {
-					desc = fmt.Sprintf("definition + trace: %s", req.Def)
+					desc = fmt.Sprintf("deep contextual trace: %s", req.Def)
 				}
 				fmt.Printf("Added: %s (%s)\n", rendered.label, desc)
 			}
 			continue
 		}
 
+		// 6. Regular File / Slices / Searches
 		absPath := filepath.Join(rootPath, filepath.FromSlash(req.Path))
-
-		isBin, err := fileutil.IsBinary(absPath)
-		if err != nil || isBin {
+		if isBin, err := fileutil.IsBinary(absPath); err != nil || isBin {
 			continue
 		}
 
@@ -508,14 +802,18 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 			continue
 		}
 
-		content, startLine, endLine := extractSections(string(rawBytes), req)
-
+		content, startLine, endLine := extractSectionsCustom(string(rawBytes), req, !req.ForPatch)
 		redactedCount := 0
 		if opts.RedactSecrets {
 			content, redactedCount = fileutil.RedactSecrets(content)
 		}
 
-		formatted := renderFormattedEntry(req.Path, content, format, startLine, endLine)
+		var formatted string
+		if req.ForPatch {
+			formatted = fmt.Sprintf("<!-- textify: patch anchor block (ready to copy into <replace> or <search>) -->\n<replace path=\"%s\">\n<search>\n%s\n</search>\n<with>\n%s\n</with>\n</replace>\n\n", req.Path, strings.TrimRight(content, "\n"), strings.TrimRight(content, "\n"))
+		} else {
+			formatted = renderFormattedEntry(req.Path, content, format, startLine, endLine)
+		}
 
 		n, writeErr := bufWriter.WriteString(formatted)
 		if writeErr != nil {
@@ -547,12 +845,127 @@ func LoadRequests(rootPath string, cfg *config.Config, requests []FileRequest, w
 				}
 				desc = fmt.Sprintf("lines %s", strings.Join(rStrs, ", "))
 			}
+			if req.ForPatch {
+				desc += " [patch-ready]"
+			}
 			fmt.Printf("Added: %s (%s)\n", req.Path, desc)
 		}
 	}
 
 	result.ApproxTokens = int(result.TotalBytes / 4)
 	return result, nil
+}
+
+func handleCaseRequest(rootPath string, req FileRequest) (string, int, int, error) {
+	filePath := req.Path
+	if filePath == "" {
+		return "", 0, 0, fmt.Errorf("case extraction requires path attribute")
+	}
+	absPath := filepath.Join(rootPath, filepath.FromSlash(filePath))
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	body, sLine, eLine, err := parser.ExtractCase(filePath, string(data), req.Fn, req.Case)
+	if err != nil {
+		return "", 0, 0, err
+	}
+
+	if req.ForPatch {
+		return body, sLine, eLine, nil
+	}
+
+	lines := strings.Split(body, "\n")
+	var numbered strings.Builder
+	for i, l := range lines {
+		numbered.WriteString(fmt.Sprintf("%5d | %s\n", sLine+i, l))
+	}
+	return numbered.String(), sLine, eLine, nil
+}
+
+func renderStructMethods(idx *parser.CodebaseIndex, req FileRequest, redact bool) string {
+	methods := idx.FindStructMethods(req.Struct, req.Methods)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Methods for Struct/Class %q (%d matched) ===\n\n", req.Struct, len(methods)))
+	for _, m := range methods {
+		sb.WriteString(fmt.Sprintf("--- %s %s [%s:%d-%d] ---\n", m.Kind, m.FullName(), m.File, m.StartLine, m.EndLine))
+		if req.ForPatch {
+			sb.WriteString(m.Body)
+			sb.WriteString("\n\n")
+		} else {
+			for offset, line := range strings.Split(m.Body, "\n") {
+				sb.WriteString(fmt.Sprintf("%5d | %s\n", m.StartLine+offset, line))
+			}
+			sb.WriteString("\n\n")
+		}
+	}
+	content := sb.String()
+	if redact {
+		content, _ = fileutil.RedactSecrets(content)
+	}
+	return content
+}
+
+func renderXRefs(idx *parser.CodebaseIndex, symbol, action, rootPath string, redact bool) string {
+	xrefs := idx.FindXRefs(symbol, action, rootPath)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Cross-References for Symbol %q (action: %s, %d matches) ===\n\n", symbol, action, len(xrefs)))
+	for _, x := range xrefs {
+		sb.WriteString(fmt.Sprintf("File: %s:%d [%s]\n%s\n\n", x.File, x.Line, x.Action, x.Context))
+	}
+	content := sb.String()
+	if redact {
+		content, _ = fileutil.RedactSecrets(content)
+	}
+	return content
+}
+
+func renderFeatureContext(idx *parser.CodebaseIndex, rootPath string, fc *FeatureContextReq, redact bool) string {
+	var sb strings.Builder
+	sb.WriteString("================================================================================\n")
+	sb.WriteString(fmt.Sprintf("FEATURE CONTEXT BUNDLE [Language: %s]\n", fc.Lang))
+	sb.WriteString("================================================================================\n\n")
+
+	if len(fc.TargetTypes) > 0 {
+		sb.WriteString("### 1. Target Type Definitions & Schemas\n\n")
+		for _, name := range fc.TargetTypes {
+			syms := idx.FindDefinition(name, "")
+			for _, s := range syms {
+				sb.WriteString(fmt.Sprintf("--- %s %s [%s:%d-%d] ---\n", s.Kind, s.FullName(), s.File, s.StartLine, s.EndLine))
+				sb.WriteString(s.Body)
+				sb.WriteString("\n\n")
+			}
+		}
+	}
+
+	if len(fc.Entrypoints) > 0 {
+		sb.WriteString("### 2. Entrypoint Deep Execution Traces\n\n")
+		for _, ep := range fc.Entrypoints {
+			deep := idx.TraceDeep(ep.Symbol, ep.Depth)
+			if deep != nil {
+				sb.WriteString(deep.Render(fc.ForPatch))
+			}
+		}
+	}
+
+	if len(fc.Touchpoints) > 0 {
+		sb.WriteString("### 3. Touchpoint Cross-References\n\n")
+		for _, tp := range fc.Touchpoints {
+			xrefs := idx.FindXRefs(tp, "all", rootPath)
+			sb.WriteString(fmt.Sprintf("=== Touchpoint %q (%d occurrences) ===\n", tp, len(xrefs)))
+			for _, x := range xrefs {
+				sb.WriteString(fmt.Sprintf("%s:%d | %s\n", x.File, x.Line, x.LineText))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("================================================================================\n\n")
+	content := sb.String()
+	if redact {
+		content, _ = fileutil.RedactSecrets(content)
+	}
+	return content
 }
 
 type astRenderResult struct {
@@ -563,15 +976,21 @@ type astRenderResult struct {
 	redacted  int
 }
 
-// buildASTContent resolves a symbol against the AST index and renders its
-// definition with exact source line numbers. When req.Trace is set, the
-// execution flow or type dependency hierarchy is prepended.
 func buildASTContent(index *parser.CodebaseIndex, req FileRequest, redact bool) astRenderResult {
 	var sb strings.Builder
 
 	if req.Trace {
-		sb.WriteString(index.TraceFlow(req.Def, 5))
-		sb.WriteString("\n")
+		depth := req.Depth
+		if depth <= 0 {
+			depth = 2
+		}
+		deep := index.TraceDeep(req.Def, depth)
+		if deep != nil {
+			sb.WriteString(deep.Render(req.ForPatch))
+		} else {
+			sb.WriteString(index.TraceFlow(req.Def, depth))
+			sb.WriteString("\n")
+		}
 	}
 
 	syms := index.FindDefinition(req.Def, req.Path)
@@ -579,16 +998,21 @@ func buildASTContent(index *parser.CodebaseIndex, req FileRequest, redact bool) 
 	startLine := 0
 	endLine := 0
 
-	if len(syms) == 0 {
+	if len(syms) == 0 && !req.Trace {
 		sb.WriteString(fmt.Sprintf("/* Symbol %q not found in AST index */\n", req.Def))
-	} else {
+	} else if !req.Trace {
 		firstFile = syms[0].File
 		for _, sym := range syms {
 			sb.WriteString(fmt.Sprintf("/* Definition: %s %s [%s:%d-%d] */\n", sym.Kind, sym.FullName(), sym.File, sym.StartLine, sym.EndLine))
-			for offset, line := range strings.Split(sym.Body, "\n") {
-				sb.WriteString(fmt.Sprintf("%5d | %s\n", sym.StartLine+offset, line))
+			if req.ForPatch {
+				sb.WriteString(sym.Body)
+				sb.WriteString("\n\n")
+			} else {
+				for offset, line := range strings.Split(sym.Body, "\n") {
+					sb.WriteString(fmt.Sprintf("%5d | %s\n", sym.StartLine+offset, line))
+				}
+				sb.WriteString("\n")
 			}
-			sb.WriteString("\n")
 
 			if startLine == 0 || sym.StartLine < startLine {
 				startLine = sym.StartLine
@@ -640,6 +1064,10 @@ func fileMatchesQuery(content, query string) bool {
 }
 
 func extractSections(content string, req FileRequest) (string, int, int) {
+	return extractSectionsCustom(content, req, true)
+}
+
+func extractSectionsCustom(content string, req FileRequest, numbered bool) (string, int, int) {
 	lines := strings.Split(content, "\n")
 	totalLines := len(lines)
 	if totalLines == 0 {
@@ -648,7 +1076,6 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 
 	var intervals []LineRange
 
-	// 1. Pattern-bounded range: from="..." to="..."
 	if req.From != "" {
 		fromRe, fromErr := regexp.Compile("(?i)" + req.From)
 		toRe, toErr := regexp.Compile("(?i)" + req.To)
@@ -693,7 +1120,6 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		}
 	}
 
-	// 2. Anchor with forward window
 	if req.Anchor != "" {
 		ctx := req.Context
 		if ctx <= 0 {
@@ -717,7 +1143,6 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		}
 	}
 
-	// 3. Keyword / Query search with context
 	if req.Query != "" {
 		ctx := req.Context
 		if ctx <= 0 {
@@ -748,13 +1173,11 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		}
 	}
 
-	// 4. Symbol Extraction
 	if len(req.Symbols) > 0 {
 		symIntervals := findSymbolIntervals(lines, req.Symbols)
 		intervals = append(intervals, symIntervals...)
 	}
 
-	// 5. Explicit Line Ranges
 	if len(req.Ranges) > 0 {
 		for _, r := range req.Ranges {
 			st := r.Start
@@ -772,14 +1195,17 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		}
 	}
 
-	// If no filters matched or specified, return full file
 	if len(intervals) == 0 {
 		if req.Query != "" || req.From != "" || req.Anchor != "" || len(req.Symbols) > 0 {
 			return fmt.Sprintf("/* No matches found in %s */\n", req.Path), 1, totalLines
 		}
 		var sb strings.Builder
 		for i, line := range lines {
-			sb.WriteString(fmt.Sprintf("%5d | %s\n", i+1, line))
+			if numbered {
+				sb.WriteString(fmt.Sprintf("%5d | %s\n", i+1, line))
+			} else {
+				sb.WriteString(line + "\n")
+			}
 		}
 		return sb.String(), 1, totalLines
 	}
@@ -794,11 +1220,19 @@ func extractSections(content string, req FileRequest) (string, int, int) {
 		if idx > 0 {
 			prevEnd := merged[idx-1].End
 			if r.Start > prevEnd+1 {
-				sb.WriteString(fmt.Sprintf("      ... [skipped lines %d-%d] ...\n", prevEnd+1, r.Start-1))
+				if numbered {
+					sb.WriteString(fmt.Sprintf("      ... [skipped lines %d-%d] ...\n", prevEnd+1, r.Start-1))
+				} else {
+					sb.WriteString("...\n")
+				}
 			}
 		}
 		for i := r.Start - 1; i < r.End && i < totalLines; i++ {
-			sb.WriteString(fmt.Sprintf("%5d | %s\n", i+1, lines[i]))
+			if numbered {
+				sb.WriteString(fmt.Sprintf("%5d | %s\n", i+1, lines[i]))
+			} else {
+				sb.WriteString(lines[i] + "\n")
+			}
 		}
 	}
 
@@ -835,8 +1269,7 @@ func mergeRanges(ranges []LineRange) []LineRange {
 func findSymbolIntervals(lines []string, symbols []string) []LineRange {
 	var intervals []LineRange
 	prefixes := []string{
-		"func ", "fn ", "pub fn ", "type ", "struct ", "interface ",
-		"class ", "def ", "trait ", "enum ", "export function ", "export class ",
+		"func ", "fn ", "pub fn ", "type ", "struct ", "interface ", "class ", "def ", "trait ", "enum ", "export function ", "export class ",
 	}
 
 	for idx, line := range lines {

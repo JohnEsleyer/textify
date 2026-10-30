@@ -1,396 +1,180 @@
 package patcher
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
-	"go/ast"
 	"go/format"
-	goParser "go/parser"
-	"go/printer"
-	"go/token"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/JohnEsleyer/textify/internal/parser"
-	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-// ActionType identifies the kind of patch operation.
-type ActionType string
+// ChangeType represents the kind of operation applied.
+type ChangeType string
 
 const (
-	ActionFile    ActionType = "file"
-	ActionReplace ActionType = "replace"
-	ActionDelete  ActionType = "delete"
+	ChangeCreate ChangeType = "CREATE"
+	ChangeUpdate ChangeType = "UPDATE"
+	ChangeDelete ChangeType = "DELETE"
 )
 
-// Directive defines a single parsed change command.
-type Directive struct {
-	Type    ActionType
-	Path    string
-	Content string // For ActionFile
-
-	// Target attributes for ActionReplace
-	Symbol string
-	Within string // Surgical scope bounding (function, method, struct)
-	Fn     string // Function for AST case replacement
-	Case   string // Case target for AST case replacement
-	From   string
-	To     string
-	After  string
-	Before string
-	Lines  string
-	Search string
-	With   string
+// ChangeRecord records a validated modification to a file.
+type ChangeRecord struct {
+	Type ChangeType
+	Path string
+	Diff string
 }
 
-// PatchOptions configures patch application behavior.
+// PatchOptions configures patch execution.
 type PatchOptions struct {
-	DryRun  bool
-	AutoFix bool
-	Stdin   io.Reader
-	Stdout  io.Writer
+	DryRun bool
+	Fix    bool
 }
 
-// FileChangeType describes the category of modification applied to a file.
-type FileChangeType string
-
-const (
-	ChangeCreate FileChangeType = "CREATE"
-	ChangeUpdate FileChangeType = "UPDATE"
-	ChangeDelete FileChangeType = "DELETE"
-)
-
-// FileChange records the outcome of a single directive.
-type FileChange struct {
-	Path        string
-	Type        FileChangeType
-	Description string
-	Lines       int
-}
-
-// PatchResult summarizes all applied or validated operations.
+// PatchResult contains results from applying a patch bundle.
 type PatchResult struct {
-	Changes []FileChange
+	Changes []ChangeRecord
+}
+
+type fileOp struct {
+	kind     ChangeType
+	path     string
+	content  string
+	replaces []replaceDirective
+}
+
+type replaceDirective struct {
+	symbol  string
+	fn      string
+	caseVal string
+	within  string
+	search  string
+	with    string
+	after   string
+	before  string
+	from    string
+	to      string
 }
 
 var (
-	xmlFileTagRegex    = regexp.MustCompile(`(?is)<file\s+([^>]*?)>(.*?)</file>`)
-	xmlReplaceTagRegex = regexp.MustCompile(`(?is)<(?:replace|ast-replace)\s+([^>]*?)>(.*?)</(?:replace|ast-replace)>`)
-	xmlDeleteTagRegex  = regexp.MustCompile(`(?i)<delete\s+([^>]*?)(?:/>|>.*?</delete>)`)
+	tagFileRegex    = regexp.MustCompile(`(?is)<file\s+path=["']([^"']+)["']\s*>(.*?)</file>`)
+	tagDeleteRegex  = regexp.MustCompile(`(?i)<delete\s+path=["']([^"']+)["']\s*/>`)
+	tagReplaceRegex = regexp.MustCompile(`(?is)<replace\s+([^>]+)>(.*?)</replace>`)
 
-	xmlSearchBlockRegex = regexp.MustCompile(`(?is)<search>(.*?)</search>`)
-	xmlWithBlockRegex   = regexp.MustCompile(`(?is)<with>(.*?)</with>`)
+	attrPath   = regexp.MustCompile(`(?i)\bpath=["']([^"']+)["']`)
+	attrSymbol = regexp.MustCompile(`(?i)\bsymbol=["']([^"']+)["']`)
+	attrFn     = regexp.MustCompile(`(?i)\b(?:fn|func)=["']([^"']+)["']`)
+	attrCase   = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
+	attrWithin = regexp.MustCompile(`(?i)\bwithin=["']([^"']+)["']`)
+	attrAfter  = regexp.MustCompile(`(?i)\bafter=["']([^"']+)["']`)
+	attrBefore = regexp.MustCompile(`(?i)\bbefore=["']([^"']+)["']`)
+	attrFrom   = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	attrTo     = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
 
-	xmlAttrPath   = regexp.MustCompile(`(?i)\b(?:path|file)=["']([^"']+)["']`)
-	xmlAttrSymbol = regexp.MustCompile(`(?i)\b(?:symbol|struct|name)=["']([^"']+)["']`)
-	xmlAttrWithin = regexp.MustCompile(`(?i)\b(?:within|scope)=["']([^"']+)["']`)
-	xmlAttrFn     = regexp.MustCompile(`(?i)\b(?:fn|func|function|method)=["']([^"']+)["']`)
-	xmlAttrCase   = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
-	xmlAttrFrom   = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
-	xmlAttrTo     = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
-	xmlAttrAfter  = regexp.MustCompile(`(?i)\bafter=["']([^"']+)["']`)
-	xmlAttrBefore = regexp.MustCompile(`(?i)\bbefore=["']([^"']+)["']`)
-	xmlAttrLines  = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
-
-	lineNumberRegex = regexp.MustCompile(`(?m)^\s*\d+\s*\|\s?`)
-	codeFenceRegex  = regexp.MustCompile(`(?s)^[ \t]*` + "```" + `[a-zA-Z0-9_-]*\r?\n(.*?)\r?\n[ \t]*` + "```" + `[ \t]*$`)
-	tagLeakageRegex = regexp.MustCompile(`(?m)^\s*</?(?:file|replace|ast-replace|search|with|delete)(?:\s+[^>]*)?>\s*$`)
+	searchBlockRegex = regexp.MustCompile(`(?is)<search>\s*(.*?)\s*</search>`)
+	withBlockRegex   = regexp.MustCompile(`(?is)<with>\s*(.*?)\s*</with>`)
 )
 
-// ParseDirectives extracts and sanitizes all patch directives from input text.
-func ParseDirectives(input string) ([]Directive, error) {
-	type rawItem struct {
-		pos int
-		dir Directive
-	}
-
-	var items []rawItem
-
-	// 1. Parse <file path="...">...</file>
-	for _, m := range xmlFileTagRegex.FindAllStringSubmatchIndex(input, -1) {
-		attrs := input[m[2]:m[3]]
-		body := input[m[4]:m[5]]
-
-		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
-		if len(pathMatch) < 2 {
-			continue
-		}
-		path := filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
-		cleanBody := sanitizeContent(body, true)
-
-		items = append(items, rawItem{
-			pos: m[0],
-			dir: Directive{
-				Type:    ActionFile,
-				Path:    path,
-				Content: cleanBody,
-			},
-		})
-	}
-
-	// 2. Parse <replace path="...">...</replace> or <ast-replace path="...">...</ast-replace>
-	for _, m := range xmlReplaceTagRegex.FindAllStringSubmatchIndex(input, -1) {
-		attrs := input[m[2]:m[3]]
-		body := input[m[4]:m[5]]
-
-		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
-		if len(pathMatch) < 2 {
-			continue
-		}
-		path := filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
-
-		dir := Directive{
-			Type: ActionReplace,
-			Path: path,
-		}
-
-		if match := xmlAttrSymbol.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.Symbol = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrWithin.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.Within = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrFn.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.Fn = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrCase.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.Case = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrFrom.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.From = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrTo.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.To = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrAfter.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.After = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrBefore.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.Before = strings.TrimSpace(match[1])
-		}
-		if match := xmlAttrLines.FindStringSubmatch(attrs); len(match) >= 2 {
-			dir.Lines = strings.TrimSpace(match[1])
-		}
-
-		if sMatch := xmlSearchBlockRegex.FindStringSubmatch(body); len(sMatch) >= 2 {
-			dir.Search = sanitizeContent(sMatch[1], false)
-		}
-		if wMatch := xmlWithBlockRegex.FindStringSubmatch(body); len(wMatch) >= 2 {
-			dir.With = sanitizeContent(wMatch[1], true)
-		} else if dir.Search == "" {
-			dir.With = sanitizeContent(body, true)
-		}
-
-		// Validation: every <replace> must have a target
-		hasTarget := dir.Symbol != "" || (dir.From != "" && dir.To != "") ||
-			dir.After != "" || dir.Before != "" || dir.Lines != "" || dir.Search != "" ||
-			dir.Case != "" || dir.Within != ""
-		if !hasTarget {
-			return nil, fmt.Errorf("replace directive for %q missing target (must specify symbol, search block, from/to, after, before, lines, within, or case)", path)
-		}
-
-		items = append(items, rawItem{
-			pos: m[0],
-			dir: dir,
-		})
-	}
-
-	// 3. Parse <delete path="..." />
-	for _, m := range xmlDeleteTagRegex.FindAllStringSubmatchIndex(input, -1) {
-		attrs := input[m[2]:m[3]]
-		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
-		if len(pathMatch) < 2 {
-			continue
-		}
-		path := filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
-
-		items = append(items, rawItem{
-			pos: m[0],
-			dir: Directive{
-				Type: ActionDelete,
-				Path: path,
-			},
-		})
-	}
-
-	// Maintain strict document appearance order
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].pos < items[j].pos
-	})
-
-	directives := make([]Directive, len(items))
-	for i, it := range items {
-		directives[i] = it.dir
-	}
-
-	return directives, nil
-}
-
-// sanitizeContent strips line numbers, markdown fences, and accidental tag leaks.
-func sanitizeContent(content string, stripLeaks bool) string {
-	res := lineNumberRegex.ReplaceAllString(content, "")
-
-	trimmed := strings.TrimSpace(res)
-	if match := codeFenceRegex.FindStringSubmatch(trimmed); len(match) >= 2 {
-		res = match[1]
-	}
-
-	if stripLeaks {
-		res = tagLeakageRegex.ReplaceAllString(res, "")
-	}
-
-	return strings.Trim(res, "\r\n")
-}
-
-// VFS represents an in-memory virtual filesystem for atomic two-pass execution.
-type VFS struct {
-	rootDir string
-	files   map[string][]byte
-	deleted map[string]bool
-	created map[string]bool
-	updated map[string]bool
-}
-
-// NewVFS initializes a virtual filesystem overlay on rootDir.
-func NewVFS(rootDir string) *VFS {
-	return &VFS{
-		rootDir: rootDir,
-		files:   make(map[string][]byte),
-		deleted: make(map[string]bool),
-		created: make(map[string]bool),
-		updated: make(map[string]bool),
-	}
-}
-
-// ReadFile retrieves a file from memory or loads it from disk overlay.
-func (v *VFS) ReadFile(relPath string) ([]byte, error) {
-	norm := filepath.ToSlash(relPath)
-	if v.deleted[norm] {
-		return nil, os.ErrNotExist
-	}
-	if data, ok := v.files[norm]; ok {
-		return data, nil
-	}
-
-	diskPath := filepath.Join(v.rootDir, filepath.FromSlash(norm))
-	data, err := os.ReadFile(diskPath)
+// Apply parses and executes a multi-file patch atomically using a two-pass VFS.
+func Apply(root string, patchContent string, opts PatchOptions) (*PatchResult, error) {
+	ops, err := parsePatchDirectives(patchContent)
 	if err != nil {
 		return nil, err
 	}
-	v.files[norm] = data
-	return data, nil
-}
 
-// WriteFile stages new file content into memory.
-func (v *VFS) WriteFile(relPath string, data []byte) {
-	norm := filepath.ToSlash(relPath)
-	delete(v.deleted, norm)
-	v.files[norm] = data
-}
-
-// DeleteFile stages a file deletion in memory.
-func (v *VFS) DeleteFile(relPath string) {
-	norm := filepath.ToSlash(relPath)
-	v.deleted[norm] = true
-	delete(v.files, norm)
-}
-
-// Apply parses directives, validates them atomically in VFS, and commits to disk.
-func Apply(rootDir, input string, opts PatchOptions) (*PatchResult, error) {
-	directives, err := ParseDirectives(input)
-	if err != nil {
-		return nil, err
-	}
-	if len(directives) == 0 {
-		return &PatchResult{}, nil
+	if len(ops) == 0 {
+		return nil, fmt.Errorf("no valid patch directives (<file>, <replace>, or <delete>) found in input")
 	}
 
-	vfs := NewVFS(rootDir)
-	var changes []FileChange
+	// PASS 1: Virtual File System (VFS) in-memory evaluation
+	vfs := make(map[string]string)
+	vfsDeleted := make(map[string]bool)
 
-	// PASS 1: Sequential In-Memory Simulation & Atomic Validation
-	for idx, dir := range directives {
-		switch dir.Type {
-		case ActionFile:
-			norm := filepath.ToSlash(dir.Path)
-			diskPath := filepath.Join(rootDir, filepath.FromSlash(norm))
-			_, statErr := os.Stat(diskPath)
-			isNew := os.IsNotExist(statErr) && !vfs.updated[norm]
+	// Load existing file contents into VFS
+	for _, op := range ops {
+		cleanP := filepath.ToSlash(filepath.Clean(op.path))
+		if _, ok := vfs[cleanP]; ok {
+			continue
+		}
+		absP := filepath.Join(root, filepath.FromSlash(cleanP))
+		data, readErr := os.ReadFile(absP)
+		if readErr == nil {
+			vfs[cleanP] = string(data)
+		}
+	}
 
-			vfs.WriteFile(norm, []byte(dir.Content))
-			if isNew {
-				vfs.created[norm] = true
-				changes = append(changes, FileChange{
-					Path:        norm,
-					Type:        ChangeCreate,
-					Description: "create file",
-					Lines:       len(strings.Split(dir.Content, "\n")),
-				})
-			} else {
-				vfs.updated[norm] = true
-				changes = append(changes, FileChange{
-					Path:        norm,
-					Type:        ChangeUpdate,
-					Description: "overwrite file",
-					Lines:       len(strings.Split(dir.Content, "\n")),
-				})
-			}
+	var changes []ChangeRecord
 
-		case ActionDelete:
-			norm := filepath.ToSlash(dir.Path)
-			vfs.DeleteFile(norm)
-			changes = append(changes, FileChange{
-				Path:        norm,
-				Type:        ChangeDelete,
-				Description: "delete file",
+	for _, op := range ops {
+		cleanP := filepath.ToSlash(filepath.Clean(op.path))
+		switch op.kind {
+		case ChangeCreate:
+			vfs[cleanP] = op.content
+			delete(vfsDeleted, cleanP)
+			changes = append(changes, ChangeRecord{
+				Type: ChangeCreate,
+				Path: cleanP,
 			})
 
-		case ActionReplace:
-			norm := filepath.ToSlash(dir.Path)
-			contentBytes, readErr := vfs.ReadFile(norm)
-			if readErr != nil {
-				return nil, fmt.Errorf("directive #%d: target file %q does not exist", idx+1, norm)
+		case ChangeDelete:
+			vfsDeleted[cleanP] = true
+			delete(vfs, cleanP)
+			changes = append(changes, ChangeRecord{
+				Type: ChangeDelete,
+				Path: cleanP,
+			})
+
+		case ChangeUpdate:
+			curr, exists := vfs[cleanP]
+			if !exists || vfsDeleted[cleanP] {
+				return nil, fmt.Errorf("cannot patch %q: file does not exist", cleanP)
 			}
 
-			newContent, desc, repErr := executeReplacement(norm, string(contentBytes), dir, opts)
-			if repErr != nil {
-				return nil, fmt.Errorf("directive #%d on %q failed: %w", idx+1, norm, repErr)
+			updated := curr
+			for _, rep := range op.replaces {
+				newContent, repErr := applyReplace(cleanP, updated, rep, opts.Fix)
+				if repErr != nil {
+					return nil, fmt.Errorf("failed to apply replace on %q: %w", cleanP, repErr)
+				}
+				updated = newContent
 			}
 
-			vfs.WriteFile(norm, []byte(newContent))
-			vfs.updated[norm] = true
-			changes = append(changes, FileChange{
-				Path:        norm,
-				Type:        ChangeUpdate,
-				Description: desc,
-				Lines:       len(strings.Split(newContent, "\n")),
+			// Format Go files if modified
+			if strings.HasSuffix(cleanP, ".go") {
+				if formatted, err := format.Source([]byte(updated)); err == nil {
+					updated = string(formatted)
+				}
+			}
+
+			vfs[cleanP] = updated
+			changes = append(changes, ChangeRecord{
+				Type: ChangeUpdate,
+				Path: cleanP,
 			})
 		}
 	}
 
-	// PASS 2: Commit staged changes to disk (unless dry run)
+	// PASS 2: Atomic commit to disk (unless DryRun)
 	if !opts.DryRun {
-		for delPath := range vfs.deleted {
-			target := filepath.Join(rootDir, filepath.FromSlash(delPath))
-			_ = os.Remove(target)
-		}
+		for _, op := range ops {
+			cleanP := filepath.ToSlash(filepath.Clean(op.path))
+			absP := filepath.Join(root, filepath.FromSlash(cleanP))
 
-		for normPath, content := range vfs.files {
-			if !vfs.created[normPath] && !vfs.updated[normPath] {
+			if vfsDeleted[cleanP] {
+				_ = os.Remove(absP)
 				continue
 			}
-			target := filepath.Join(rootDir, filepath.FromSlash(normPath))
-			if mkErr := os.MkdirAll(filepath.Dir(target), 0755); mkErr != nil {
-				return nil, fmt.Errorf("failed creating parent directory for %q: %w", normPath, mkErr)
-			}
-			if writeErr := os.WriteFile(target, content, 0644); writeErr != nil {
-				return nil, fmt.Errorf("failed writing file %q: %w", normPath, writeErr)
+
+			if content, ok := vfs[cleanP]; ok {
+				if err := os.MkdirAll(filepath.Dir(absP), 0755); err != nil {
+					return nil, fmt.Errorf("create dir for %q: %w", cleanP, err)
+				}
+				if err := os.WriteFile(absP, []byte(content), 0644); err != nil {
+					return nil, fmt.Errorf("write %q: %w", cleanP, err)
+				}
 			}
 		}
 	}
@@ -398,997 +182,291 @@ func Apply(rootDir, input string, opts PatchOptions) (*PatchResult, error) {
 	return &PatchResult{Changes: changes}, nil
 }
 
-func executeReplacement(filePath, content string, dir Directive, opts PatchOptions) (string, string, error) {
-	// 1. Structural AST Case replacement (<replace fn="..." case="...">)
-	if dir.Case != "" {
-		fnName := dir.Fn
-		if fnName == "" {
-			fnName = dir.Within
+func parsePatchDirectives(input string) ([]fileOp, error) {
+	var ops []fileOp
+	fileReplaces := make(map[string][]replaceDirective)
+
+	// 1. <file path="...">
+	for _, m := range tagFileRegex.FindAllStringSubmatch(input, -1) {
+		path := filepath.ToSlash(strings.TrimSpace(m[1]))
+		content := m[2]
+		if strings.HasPrefix(content, "\r\n") {
+			content = content[2:]
+		} else if strings.HasPrefix(content, "\n") {
+			content = content[1:]
 		}
-		res, desc, err := replaceASTCase(filePath, content, fnName, dir.Case, dir.With)
-		if err != nil {
-			return "", "", err
-		}
-		return res, desc, nil
+		ops = append(ops, fileOp{
+			kind:    ChangeCreate,
+			path:    path,
+			content: content,
+		})
 	}
 
-	// 2. Surgical Scope Bounding (within="..." or scope="...")
-	if dir.Within != "" {
-		res, desc, err := executeScopedReplacement(filePath, content, dir, opts)
-		if err != nil {
-			return "", "", err
-		}
-		return res, desc, nil
+	// 2. <delete path="..." />
+	for _, m := range tagDeleteRegex.FindAllStringSubmatch(input, -1) {
+		path := filepath.ToSlash(strings.TrimSpace(m[1]))
+		ops = append(ops, fileOp{
+			kind: ChangeDelete,
+			path: path,
+		})
 	}
 
-	// 3. Symbol-based AST replacement
-	if dir.Symbol != "" {
-		res, err := replaceSymbol(filePath, content, dir.Symbol, dir.With)
-		if err != nil {
-			return "", "", err
+	// 3. <replace ...>
+	for _, m := range tagReplaceRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		body := m[2]
+
+		pMatch := attrPath.FindStringSubmatch(attrs)
+		if len(pMatch) < 2 {
+			continue
 		}
-		return res, fmt.Sprintf("replace symbol %q", dir.Symbol), nil
+		path := filepath.ToSlash(strings.TrimSpace(pMatch[1]))
+
+		rep := replaceDirective{}
+		if sm := attrSymbol.FindStringSubmatch(attrs); len(sm) >= 2 {
+			rep.symbol = strings.TrimSpace(sm[1])
+		}
+		if fm := attrFn.FindStringSubmatch(attrs); len(fm) >= 2 {
+			rep.fn = strings.TrimSpace(fm[1])
+		}
+		if cm := attrCase.FindStringSubmatch(attrs); len(cm) >= 2 {
+			rep.caseVal = strings.TrimSpace(cm[1])
+		}
+		if wm := attrWithin.FindStringSubmatch(attrs); len(wm) >= 2 {
+			rep.within = strings.TrimSpace(wm[1])
+		}
+		if am := attrAfter.FindStringSubmatch(attrs); len(am) >= 2 {
+			rep.after = strings.TrimSpace(am[1])
+		}
+		if bm := attrBefore.FindStringSubmatch(attrs); len(bm) >= 2 {
+			rep.before = strings.TrimSpace(bm[1])
+		}
+		if fromM := attrFrom.FindStringSubmatch(attrs); len(fromM) >= 2 {
+			rep.from = strings.TrimSpace(fromM[1])
+		}
+		if toM := attrTo.FindStringSubmatch(attrs); len(toM) >= 2 {
+			rep.to = strings.TrimSpace(toM[1])
+		}
+
+		if sMatch := searchBlockRegex.FindStringSubmatch(body); len(sMatch) >= 2 {
+			rep.search = sMatch[1]
+		}
+		if wMatch := withBlockRegex.FindStringSubmatch(body); len(wMatch) >= 2 {
+			rep.with = wMatch[1]
+		} else {
+			// Content of replace without with tags
+			rep.with = strings.TrimSpace(body)
+		}
+
+		fileReplaces[path] = append(fileReplaces[path], rep)
 	}
 
-	// 4. Search block replacement (5-tier match + token-fuzzy tolerance & diff)
-	if dir.Search != "" {
-		res, err := replaceSearch(filePath, content, dir.Search, dir.With, 0, opts)
-		if err != nil {
-			return "", "", err
-		}
-		return res, "search & replace block", nil
+	for p, reps := range fileReplaces {
+		ops = append(ops, fileOp{
+			kind:     ChangeUpdate,
+			path:     p,
+			replaces: reps,
+		})
 	}
 
-	// 5. Pattern bounds (from="..." to="...")
-	if dir.From != "" && dir.To != "" {
-		res, err := replaceFromTo(content, dir.From, dir.To, dir.With)
-		if err != nil {
-			return "", "", err
-		}
-		return res, fmt.Sprintf("replace from %q to %q", dir.From, dir.To), nil
-	}
-
-	// 6. Anchor insertion (after="...")
-	if dir.After != "" {
-		res, err := insertAnchor(content, dir.After, dir.With, true)
-		if err != nil {
-			return "", "", err
-		}
-		return res, fmt.Sprintf("insert after %q", dir.After), nil
-	}
-
-	// 7. Anchor insertion (before="...")
-	if dir.Before != "" {
-		res, err := insertAnchor(content, dir.Before, dir.With, false)
-		if err != nil {
-			return "", "", err
-		}
-		return res, fmt.Sprintf("insert before %q", dir.Before), nil
-	}
-
-	// 8. Explicit line ranges (lines="45-60")
-	if dir.Lines != "" {
-		res, err := replaceLines(content, dir.Lines, dir.With)
-		if err != nil {
-			return "", "", err
-		}
-		return res, fmt.Sprintf("replace lines %s", dir.Lines), nil
-	}
-
-	return "", "", fmt.Errorf("no valid replacement target specified")
+	return ops, nil
 }
 
-func executeScopedReplacement(filePath, content string, dir Directive, opts PatchOptions) (string, string, error) {
-	scopeStart, scopeEnd, err := findScopeRange(filePath, content, dir.Within)
-	if err != nil {
-		return "", "", fmt.Errorf("scope %q failed: %w", dir.Within, err)
-	}
-
-	contentLines := strings.Split(content, "\n")
-	if scopeStart < 0 {
-		scopeStart = 0
-	}
-	if scopeEnd > len(contentLines) {
-		scopeEnd = len(contentLines)
-	}
-	if scopeStart >= scopeEnd {
-		return "", "", fmt.Errorf("invalid scope range [%d:%d] for %q", scopeStart, scopeEnd, dir.Within)
-	}
-
-	scopeSlice := contentLines[scopeStart:scopeEnd]
-	scopeContent := strings.Join(scopeSlice, "\n")
-
-	unscopedDir := dir
-	unscopedDir.Within = ""
-
-	newScopeContent, desc, repErr := executeReplacementUnscoped(filePath, scopeContent, unscopedDir, opts, scopeStart)
-	if repErr != nil {
-		return "", "", fmt.Errorf("inside scope %q: %w", dir.Within, repErr)
-	}
-
-	result := spliceLines(contentLines, scopeStart, scopeEnd, newScopeContent)
-	return result, fmt.Sprintf("%s (within %s)", desc, dir.Within), nil
-}
-
-func executeReplacementUnscoped(filePath, content string, dir Directive, opts PatchOptions, lineOffset int) (string, string, error) {
-	if dir.Search != "" {
-		res, err := replaceSearch(filePath, content, dir.Search, dir.With, lineOffset, opts)
+func applyReplace(filePath, content string, rep replaceDirective, fix bool) (string, error) {
+	// 1. AST Case Clause Replacement
+	if rep.caseVal != "" {
+		body, start, end, err := parser.ExtractCase(filePath, content, rep.fn, rep.caseVal)
 		if err != nil {
-			return "", "", err
+			return "", fmt.Errorf("case target %q not found: %w", rep.caseVal, err)
 		}
-		return res, "search & replace block", nil
-	}
-	if dir.From != "" && dir.To != "" {
-		res, err := replaceFromTo(content, dir.From, dir.To, dir.With)
-		if err != nil {
-			return "", "", err
+		_ = body
+		lines := strings.Split(content, "\n")
+		var out []string
+		out = append(out, lines[:start-1]...)
+		out = append(out, rep.with)
+		if end < len(lines) {
+			out = append(out, lines[end:]...)
 		}
-		return res, fmt.Sprintf("replace from %q to %q", dir.From, dir.To), nil
-	}
-	if dir.After != "" {
-		res, err := insertAnchor(content, dir.After, dir.With, true)
-		if err != nil {
-			return "", "", err
-		}
-		return res, fmt.Sprintf("insert after %q", dir.After), nil
-	}
-	if dir.Before != "" {
-		res, err := insertAnchor(content, dir.Before, dir.With, false)
-		if err != nil {
-			return "", "", err
-		}
-		return res, fmt.Sprintf("insert before %q", dir.Before), nil
-	}
-	return "", "", fmt.Errorf("unsupported scoped directive")
-}
-
-func findScopeRange(filePath, content, within string) (int, int, error) {
-	target := strings.TrimSpace(within)
-	target = strings.TrimSuffix(target, "()")
-	target = strings.TrimPrefix(target, "*")
-
-	ext := strings.ToLower(filepath.Ext(filePath))
-
-	// 1. Go AST scope lookup
-	if ext == ".go" {
-		fset := token.NewFileSet()
-		fileNode, err := goParser.ParseFile(fset, filePath, []byte(content), goParser.ParseComments)
-		if err == nil {
-			for _, decl := range fileNode.Decls {
-				if fn, ok := decl.(*ast.FuncDecl); ok {
-					rec := ""
-					if fn.Recv != nil && len(fn.Recv.List) > 0 {
-						var buf bytes.Buffer
-						_ = printer.Fprint(&buf, fset, fn.Recv.List[0].Type)
-						rec = strings.TrimSpace(buf.String())
-					}
-					fullName := fn.Name.Name
-					if rec != "" {
-						fullName = strings.TrimPrefix(rec, "*") + "." + fn.Name.Name
-					}
-					if fn.Name.Name == target || fullName == target || strings.HasSuffix(fullName, "."+target) {
-						start := fset.Position(fn.Pos()).Line - 1
-						end := fset.Position(fn.End()).Line
-						return start, end, nil
-					}
-				}
-				if gen, ok := decl.(*ast.GenDecl); ok {
-					for _, spec := range gen.Specs {
-						if ts, ok := spec.(*ast.TypeSpec); ok {
-							if ts.Name.Name == target {
-								start := fset.Position(gen.Pos()).Line - 1
-								end := fset.Position(gen.End()).Line
-								return start, end, nil
-							}
-						}
-					}
-				}
-			}
-		}
+		return strings.Join(out, "\n"), nil
 	}
 
-	// 2. TypeScript / JavaScript symbol scope lookup
-	if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		syms, err := parser.ParseTypeScriptFile(filePath, []byte(content))
+	// 2. AST Symbol Replacement
+	if rep.symbol != "" {
+		syms, err := parser.ParseGoFile(filePath, []byte(content))
 		if err == nil {
 			for _, s := range syms {
-				if s.Name == target || s.FullName() == target || (s.Receiver != "" && s.Receiver+"."+s.Name == target) {
-					return s.StartLine - 1, s.EndLine, nil
+				if s.Name == rep.symbol || s.FullName() == rep.symbol {
+					lines := strings.Split(content, "\n")
+					var out []string
+					out = append(out, lines[:s.StartLine-1]...)
+					out = append(out, rep.with)
+					if s.EndLine < len(lines) {
+						out = append(out, lines[s.EndLine:]...)
+					}
+					return strings.Join(out, "\n"), nil
 				}
 			}
 		}
 	}
 
-	// 3. Generic declaration regex fallback
-	lines := strings.Split(content, "\n")
-	declPattern := regexp.MustCompile(`(?m)^[ \t]*(?:func|function|def|class|type|struct|interface|pub\s+fn|fn)\s+(?:\([^)]+\)\s*)?` + regexp.QuoteMeta(target) + `\b`)
-	loc := declPattern.FindStringIndex(content)
-	if loc != nil {
-		startLine := strings.Count(content[:loc[0]], "\n")
-		endLine := findBlockEnd(lines, startLine)
-		return startLine, endLine, nil
+	// 3. Anchor Insertions (after / before)
+	if rep.after != "" {
+		idx := strings.Index(content, rep.after)
+		if idx == -1 {
+			return "", fmt.Errorf("anchor after=%q not found", rep.after)
+		}
+		insertPos := idx + len(rep.after)
+		return content[:insertPos] + "\n" + rep.with + content[insertPos:], nil
+	}
+	if rep.before != "" {
+		idx := strings.Index(content, rep.before)
+		if idx == -1 {
+			return "", fmt.Errorf("anchor before=%q not found", rep.before)
+		}
+		return content[:idx] + rep.with + "\n" + content[idx:], nil
 	}
 
-	return 0, 0, fmt.Errorf("scope symbol %q not found in %s", within, filePath)
-}
+	// 4. Block Replacement (from ... to)
+	if rep.from != "" && rep.to != "" {
+		lines := strings.Split(content, "\n")
+		startIdx := -1
+		endIdx := -1
+		for i, l := range lines {
+			if startIdx == -1 && strings.Contains(l, rep.from) {
+				startIdx = i
+			} else if startIdx != -1 && strings.Contains(l, rep.to) {
+				endIdx = i
+				break
+			}
+		}
+		if startIdx == -1 || endIdx == -1 {
+			return "", fmt.Errorf("from/to block [%q ... %q] not found", rep.from, rep.to)
+		}
+		var out []string
+		out = append(out, lines[:startIdx]...)
+		out = append(out, rep.with)
+		if endIdx+1 < len(lines) {
+			out = append(out, lines[endIdx+1:]...)
+		}
+		return strings.Join(out, "\n"), nil
+	}
 
-func replaceASTCase(filePath, content, fnName, caseTarget, with string) (string, string, error) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	if ext == ".go" {
-		res, desc, err := replaceASTCaseGo(filePath, content, fnName, caseTarget, with)
+	// 5. Search Block with Scope Bounding (within)
+	targetText := content
+	prefixOffset := 0
+	if rep.within != "" {
+		syms, err := parser.ParseGoFile(filePath, []byte(content))
 		if err == nil {
-			return res, desc, nil
+			for _, s := range syms {
+				if s.Name == rep.within || s.FullName() == rep.within || strings.HasSuffix(s.FullName(), "."+rep.within) {
+					lines := strings.Split(content, "\n")
+					scoped := strings.Join(lines[s.StartLine-1:s.EndLine], "\n")
+					updatedScoped, err := replaceSearchText(scoped, rep.search, rep.with, fix)
+					if err != nil {
+						return "", fmt.Errorf("within=%q: %w", rep.within, err)
+					}
+					var out []string
+					out = append(out, lines[:s.StartLine-1]...)
+					out = append(out, updatedScoped)
+					if s.EndLine < len(lines) {
+						out = append(out, lines[s.EndLine:]...)
+					}
+					return strings.Join(out, "\n"), nil
+				}
+			}
 		}
 	}
-	return replaceASTCaseGeneric(content, fnName, caseTarget, with)
+
+	// 6. Direct Search and Replace (exact, wildcard ellipsis, or fuzzy)
+	_ = prefixOffset
+	return replaceSearchText(targetText, rep.search, rep.with, fix)
 }
 
-func replaceASTCaseGo(filePath, content, fnName, caseTarget, with string) (string, string, error) {
-	fset := token.NewFileSet()
-	fileNode, err := goParser.ParseFile(fset, filePath, []byte(content), goParser.ParseComments)
-	if err != nil {
-		return "", "", fmt.Errorf("parse Go AST: %w", err)
+func replaceSearchText(content, search, with string, fix bool) (string, error) {
+	searchTrim := strings.TrimSpace(search)
+	if searchTrim == "" {
+		return content, nil
 	}
 
-	cleanTarget := cleanCaseTarget(caseTarget)
-	cleanFn := strings.TrimSpace(fnName)
-	cleanFn = strings.TrimPrefix(cleanFn, "*")
-
-	type caseMatch struct {
-		startLine int
-		endLine   int
-		hasCase   bool
-		colonLine int
+	// Exact match
+	if strings.Contains(content, search) {
+		return strings.Replace(content, search, with, 1), nil
 	}
 
-	var found *caseMatch
-
-	for _, decl := range fileNode.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-
-		if cleanFn != "" {
-			receiver := ""
-			if fn.Recv != nil && len(fn.Recv.List) > 0 {
-				var buf bytes.Buffer
-				_ = printer.Fprint(&buf, fset, fn.Recv.List[0].Type)
-				receiver = strings.TrimSpace(buf.String())
-			}
-			fullName := fn.Name.Name
-			if receiver != "" {
-				fullName = strings.TrimPrefix(receiver, "*") + "." + fn.Name.Name
-			}
-			if fn.Name.Name != cleanFn && fullName != cleanFn && !strings.HasSuffix(fullName, "."+cleanFn) {
+	// Wildcard / ellipsis (...) matching
+	if strings.Contains(search, "...") {
+		parts := strings.Split(search, "...")
+		var reStr bytes.Buffer
+		for i, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
 				continue
 			}
-		}
-
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if found != nil {
-				return false
+			if i > 0 {
+				reStr.WriteString(`(?s:.*?)`)
 			}
-
-			var bodyList []ast.Stmt
-			var switchEnd token.Pos
-
-			switch sw := n.(type) {
-			case *ast.SwitchStmt:
-				if sw.Body != nil {
-					bodyList = sw.Body.List
-					switchEnd = sw.Body.End()
-				}
-			case *ast.TypeSwitchStmt:
-				if sw.Body != nil {
-					bodyList = sw.Body.List
-					switchEnd = sw.Body.End()
-				}
-			}
-
-			if len(bodyList) == 0 {
-				return true
-			}
-
-			for idx, stmt := range bodyList {
-				cc, ok := stmt.(*ast.CaseClause)
-				if !ok {
-					continue
-				}
-
-				matched := false
-				if cleanTarget == "default" && len(cc.List) == 0 {
-					matched = true
-				} else {
-					for _, expr := range cc.List {
-						var buf bytes.Buffer
-						_ = printer.Fprint(&buf, fset, expr)
-						exprStr := cleanCaseTarget(buf.String())
-						if exprStr == cleanTarget || strings.HasSuffix(exprStr, "."+cleanTarget) {
-							matched = true
-							break
-						}
-					}
-				}
-
-				if matched {
-					sLine := fset.Position(cc.Pos()).Line
-					cLine := fset.Position(cc.Colon).Line
-					eLine := 0
-					if idx+1 < len(bodyList) {
-						eLine = fset.Position(bodyList[idx+1].Pos()).Line - 1
-					} else {
-						eLine = fset.Position(switchEnd).Line - 1
-					}
-					if eLine < sLine {
-						eLine = sLine
-					}
-
-					found = &caseMatch{
-						startLine: sLine,
-						colonLine: cLine,
-						endLine:   eLine,
-						hasCase:   true,
-					}
-					return false
-				}
-			}
-
-			return true
-		})
-
-		if found != nil {
-			break
+			reStr.WriteString(regexp.QuoteMeta(trimmed))
+		}
+		re, err := regexp.Compile(reStr.String())
+		if err == nil && re.MatchString(content) {
+			return re.ReplaceAllString(content, with), nil
 		}
 	}
 
-	if found == nil {
-		return "", "", fmt.Errorf("case target %q not found in AST of %s", caseTarget, filePath)
+	// Normalized whitespace / indentation tolerance
+	cLines := strings.Split(content, "\n")
+	sLines := strings.Split(search, "\n")
+
+	cleanSLines := filterEmpty(sLines)
+	if len(cleanSLines) == 0 {
+		return content, nil
 	}
 
-	lines := strings.Split(content, "\n")
-	withTrimmed := strings.TrimSpace(with)
-
-	var updated string
-	if strings.HasPrefix(withTrimmed, "case ") || strings.HasPrefix(withTrimmed, "default") {
-		updated = spliceLines(lines, found.startLine-1, found.endLine, with)
-	} else {
-		updated = spliceLines(lines, found.colonLine, found.endLine, with)
-	}
-
-	formatted, fmtErr := format.Source([]byte(updated))
-	if fmtErr == nil {
-		updated = string(formatted)
-	}
-
-	return updated, fmt.Sprintf("AST case replacement for %q", caseTarget), nil
-}
-
-func replaceASTCaseGeneric(content, fnName, caseTarget, with string) (string, string, error) {
-	lines := strings.Split(content, "\n")
-	target := cleanCaseTarget(caseTarget)
-
-	casePattern := regexp.MustCompile(`(?i)^\s*(?:case\s+.*` + regexp.QuoteMeta(target) + `.*:|default\s*:)`)
-	matchIdx := -1
-
-	for i, l := range lines {
-		if casePattern.MatchString(l) {
-			matchIdx = i
-			break
-		}
-	}
-
-	if matchIdx == -1 {
-		return "", "", fmt.Errorf("case target %q not found", caseTarget)
-	}
-
-	endIdx := len(lines)
-	for i := matchIdx + 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "case ") || strings.HasPrefix(trimmed, "default:") || trimmed == "}" {
-			endIdx = i
-			break
-		}
-	}
-
-	withTrimmed := strings.TrimSpace(with)
-	var updated string
-	if strings.HasPrefix(withTrimmed, "case ") || strings.HasPrefix(withTrimmed, "default") {
-		updated = spliceLines(lines, matchIdx, endIdx, with)
-	} else {
-		updated = spliceLines(lines, matchIdx+1, endIdx, with)
-	}
-
-	return updated, fmt.Sprintf("case replacement for %q", caseTarget), nil
-}
-
-func cleanCaseTarget(s string) string {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "case ")
-	s = strings.TrimSuffix(s, ":")
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "*")
-	return s
-}
-
-func replaceSymbol(filePath, content, symbolName, with string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	var symbols []parser.Symbol
-	var err error
-
-	if ext == ".go" {
-		symbols, err = parser.ParseGoFile(filePath, []byte(content))
-	} else if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
-		symbols, err = parser.ParseTypeScriptFile(filePath, []byte(content))
-	}
-
-	var match *parser.Symbol
-	if err == nil && len(symbols) > 0 {
-		target := strings.TrimSpace(symbolName)
-		for _, s := range symbols {
-			if s.Name == target || s.FullName() == target {
-				match = &s
-				break
-			}
-			if s.Receiver != "" && (s.Receiver+"."+s.Name == target || "("+s.Receiver+")."+s.Name == target) {
-				match = &s
-				break
-			}
-		}
-	}
-
-	lines := strings.Split(content, "\n")
-
-	if match != nil {
-		start := match.StartLine - 1
-		end := match.EndLine
-		if start < 0 {
-			start = 0
-		}
-		if end > len(lines) {
-			end = len(lines)
-		}
-		return spliceLines(lines, start, end, with), nil
-	}
-
-	declPattern := regexp.MustCompile(`(?m)^[ \t]*(?:func|function|def|class|type|struct|interface|pub\s+fn|fn)\s+` + regexp.QuoteMeta(symbolName) + `\b`)
-	loc := declPattern.FindStringIndex(content)
-	if loc == nil {
-		return "", fmt.Errorf("symbol %q not found in %s", symbolName, filePath)
-	}
-
-	startLine := strings.Count(content[:loc[0]], "\n")
-	endLine := findBlockEnd(lines, startLine)
-
-	return spliceLines(lines, startLine, endLine, with), nil
-}
-
-func findBlockEnd(lines []string, startIdx int) int {
-	braceCount := 0
-	foundBrace := false
-
-	for i := startIdx; i < len(lines); i++ {
-		line := lines[i]
-		for _, ch := range line {
-			if ch == '{' {
-				braceCount++
-				foundBrace = true
-			} else if ch == '}' {
-				braceCount--
-			}
-		}
-		if foundBrace && braceCount <= 0 {
-			return i + 1
-		}
-		if !foundBrace && strings.HasSuffix(strings.TrimSpace(line), ";") {
-			return i + 1
-		}
-	}
-	return len(lines)
-}
-
-func replaceSearch(filePath, content, search, with string, lineOffset int, opts PatchOptions) (string, error) {
-	if containsEllipsisLine(search) {
-		return replaceSearchEllipsis(content, search, with)
-	}
-
-	// Tier 1: Exact match
-	if idx := strings.Index(content, search); idx != -1 {
-		return content[:idx] + with + content[idx+len(search):], nil
-	}
-
-	// Tier 2: Line ending normalization
-	normContent := strings.ReplaceAll(content, "\r\n", "\n")
-	normSearch := strings.ReplaceAll(search, "\r\n", "\n")
-	if idx := strings.Index(normContent, normSearch); idx != -1 {
-		return normContent[:idx] + with + normContent[idx+len(normSearch):], nil
-	}
-
-	contentLines := strings.Split(normContent, "\n")
-	searchLines := strings.Split(normSearch, "\n")
-
-	// Tier 3: Trailing whitespace tolerance
-	if res, ok := matchLinesTrailing(contentLines, searchLines, with); ok {
-		return res, nil
-	}
-
-	// Tier 4: Indentation shift tolerance
-	if res, ok := matchLinesIndentation(contentLines, searchLines, with); ok {
-		return res, nil
-	}
-
-	// Tier 5: Levenshtein / Token-Normalized Fuzzy Tolerance & Auto-Healing
-	bestIdx, bestLen, bestScore, candLines := findBestMatch(contentLines, searchLines)
-	realLine := bestIdx + lineOffset + 1
-
-	if bestScore >= 0.88 {
-		ctxMatch := len(searchLines) <= 2 ||
-			(lineSimilarity(searchLines[0], candLines[0]) >= 0.90 &&
-				lineSimilarity(searchLines[len(searchLines)-1], candLines[len(candLines)-1]) >= 0.90)
-
-		// Auto-healing under --fix or strong confidence (>= 92% with context match)
-		if (opts.AutoFix && bestScore >= 0.90) || (bestScore >= 0.92 && ctxMatch) {
-			diffText := generateUnifiedDiff("Search Block", fmt.Sprintf("Buffer at Line %d", realLine), searchLines, candLines)
-
-			if opts.AutoFix && opts.Stdin != nil {
-				prompt := fmt.Sprintf("\nTarget line %d in %s (%.0f%% match):\n%sAccept substitution and apply? [Y/n]: ", realLine, filePath, bestScore*100, diffText)
-				if promptFix(opts.Stdout, opts.Stdin, prompt) {
-					return spliceLines(contentLines, bestIdx, bestIdx+bestLen, with), nil
-				}
-			} else {
-				// Auto-heal apply
-				return spliceLines(contentLines, bestIdx, bestIdx+bestLen, with), nil
-			}
-		}
-	}
-
-	// Validation Failure with Unified Diff
-	var diffMsg strings.Builder
-	diffMsg.WriteString("search block not matched in file")
-	if bestScore >= 0.50 {
-		diffText := generateUnifiedDiff("Search Block", fmt.Sprintf("Buffer near Line %d", realLine), searchLines, candLines)
-		diffMsg.WriteString(fmt.Sprintf("\nClosest match found near line %d (similarity: %.0f%%):\n%s", realLine, bestScore*100, diffText))
-	}
-
-	return "", fmt.Errorf("%s", diffMsg.String())
-}
-
-func promptFix(stdout io.Writer, stdin io.Reader, prompt string) bool {
-	if stdout == nil {
-		stdout = os.Stdout
-	}
-	if stdin == nil {
-		stdin = os.Stdin
-	}
-	fmt.Fprint(stdout, prompt)
-	scanner := bufio.NewScanner(stdin)
-	if scanner.Scan() {
-		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
-		return ans == "" || ans == "y" || ans == "yes"
-	}
-	return false
-}
-
-func findBestMatch(contentLines, searchLines []string) (int, int, float64, []string) {
-	n := len(searchLines)
-	if n == 0 || len(contentLines) == 0 {
-		return 0, 0, 0, nil
-	}
-
-	bestIdx := 0
-	bestLen := n
-	bestScore := 0.0
-	var bestCand []string
-
-	windowSizes := []int{n}
-	if n > 3 {
-		windowSizes = append(windowSizes, n-1, n+1)
-	}
-
-	for _, wSize := range windowSizes {
-		if wSize <= 0 || wSize > len(contentLines) {
-			continue
-		}
-
-		for i := 0; i <= len(contentLines)-wSize; i++ {
-			cand := contentLines[i : i+wSize]
-			score := calculateWindowSimilarity(cand, searchLines)
-			if score > bestScore {
-				bestScore = score
-				bestIdx = i
-				bestLen = wSize
-				bestCand = cand
-			}
-		}
-	}
-
-	return bestIdx, bestLen, bestScore, bestCand
-}
-
-func calculateWindowSimilarity(cand, search []string) float64 {
-	minLen := len(cand)
-	if len(search) < minLen {
-		minLen = len(search)
-	}
-	if minLen == 0 {
-		return 0
-	}
-
-	total := 0.0
-	for i := 0; i < minLen; i++ {
-		total += lineSimilarity(cand[i], search[i])
-	}
-
-	lengthPenalty := 1.0 - (float64(abs(len(cand)-len(search))) / float64(len(search)+len(cand)))
-	return (total / float64(minLen)) * lengthPenalty
-}
-
-func lineSimilarity(a, b string) float64 {
-	tA := strings.TrimSpace(a)
-	tB := strings.TrimSpace(b)
-	if tA == tB {
-		return 1.0
-	}
-
-	maxLen := len(tA)
-	if len(tB) > maxLen {
-		maxLen = len(tB)
-	}
-	if maxLen == 0 {
-		return 1.0
-	}
-
-	dist := levenshteinDistance(tA, tB)
-	sim := 1.0 - (float64(dist) / float64(maxLen))
-	if sim < 0 {
-		return 0
-	}
-	return sim
-}
-
-func levenshteinDistance(s1, s2 string) int {
-	r1, r2 := []rune(s1), []rune(s2)
-	l1, l2 := len(r1), len(r2)
-	if l1 == 0 {
-		return l2
-	}
-	if l2 == 0 {
-		return l1
-	}
-
-	prev := make([]int, l2+1)
-	curr := make([]int, l2+1)
-	for j := 0; j <= l2; j++ {
-		prev[j] = j
-	}
-
-	for i := 1; i <= l1; i++ {
-		curr[0] = i
-		for j := 1; j <= l2; j++ {
-			cost := 1
-			if r1[i-1] == r2[j-1] {
-				cost = 0
-			}
-			curr[j] = min3(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
-		}
-		copy(prev, curr)
-	}
-
-	return prev[l2]
-}
-
-func min3(a, b, c int) int {
-	if a < b {
-		if a < c {
-			return a
-		}
-		return c
-	}
-	if b < c {
-		return b
-	}
-	return c
-}
-
-func abs(a int) int {
-	if a < 0 {
-		return -a
-	}
-	return a
-}
-
-func generateUnifiedDiff(headerA, headerB string, aLines, bLines []string) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("--- %s\n", headerA))
-	sb.WriteString(fmt.Sprintf("+++ %s\n", headerB))
-
-	m := len(aLines)
-	n := len(bLines)
-
-	dp := make([][]int, m+1)
-	for i := range dp {
-		dp[i] = make([]int, n+1)
-	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if strings.TrimSpace(aLines[i-1]) == strings.TrimSpace(bLines[j-1]) {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] >= dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
-			}
-		}
-	}
-
-	type diffItem struct {
-		op   byte
-		line string
-	}
-	var items []diffItem
-	i, j := m, n
-	for i > 0 || j > 0 {
-		if i > 0 && j > 0 && strings.TrimSpace(aLines[i-1]) == strings.TrimSpace(bLines[j-1]) {
-			items = append(items, diffItem{op: ' ', line: bLines[j-1]})
-			i--
-			j--
-		} else if j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
-			items = append(items, diffItem{op: '+', line: bLines[j-1]})
-			j--
-		} else if i > 0 && (j == 0 || dp[i-1][j] > dp[i][j-1]) {
-			items = append(items, diffItem{op: '-', line: aLines[i-1]})
-			i--
-		}
-	}
-
-	for k := len(items) - 1; k >= 0; k-- {
-		sb.WriteString(fmt.Sprintf("%c   %s\n", items[k].op, items[k].line))
-	}
-	return sb.String()
-}
-
-func containsEllipsisLine(text string) bool {
-	for _, l := range strings.Split(text, "\n") {
-		trimmed := strings.TrimSpace(l)
-		if trimmed == "..." || trimmed == "…" {
-			return true
-		}
-	}
-	return false
-}
-
-func replaceSearchEllipsis(content, search, with string) (string, error) {
-	normContent := strings.ReplaceAll(content, "\r\n", "\n")
-	contentLines := strings.Split(normContent, "\n")
-	rawSearchLines := strings.Split(strings.ReplaceAll(search, "\r\n", "\n"), "\n")
-
-	var segments [][]string
-	var current []string
-
-	for _, l := range rawSearchLines {
-		trimmed := strings.TrimSpace(l)
-		if trimmed == "..." || trimmed == "…" {
-			if len(current) > 0 {
-				segments = append(segments, current)
-				current = nil
-			}
-			continue
-		}
-		current = append(current, l)
-	}
-	if len(current) > 0 {
-		segments = append(segments, current)
-	}
-
-	if len(segments) == 0 {
-		return "", fmt.Errorf("search block contains only wildcards")
-	}
-
-	type matchSpan struct {
-		start int
-		end   int
-	}
-
-	spans := make([]matchSpan, len(segments))
-	currLine := 0
-
-	for sIdx, seg := range segments {
-		found := false
-		for i := currLine; i <= len(contentLines)-len(seg); i++ {
-			if checkSegmentMatch(contentLines[i:i+len(seg)], seg) {
-				spans[sIdx] = matchSpan{start: i, end: i + len(seg)}
-				currLine = i + len(seg)
-				found = true
-				break
-			}
-		}
-		if !found {
-			return "", fmt.Errorf("segment %d in wildcard search block not matched", sIdx+1)
-		}
-	}
-
-	var wildcards []string
-	for i := 0; i < len(spans)-1; i++ {
-		wStart := spans[i].end
-		wEnd := spans[i+1].start
-		if wStart <= wEnd && wEnd <= len(contentLines) {
-			wildcards = append(wildcards, strings.Join(contentLines[wStart:wEnd], "\n"))
-		} else {
-			wildcards = append(wildcards, "")
-		}
-	}
-
-	finalWith := with
-	if containsEllipsisLine(with) {
-		withLines := strings.Split(strings.ReplaceAll(with, "\r\n", "\n"), "\n")
-		var interpolated []string
-		wIdx := 0
-
-		for _, l := range withLines {
-			trimmed := strings.TrimSpace(l)
-			if trimmed == "..." || trimmed == "…" {
-				if wIdx < len(wildcards) {
-					if wildcards[wIdx] != "" {
-						interpolated = append(interpolated, wildcards[wIdx])
-					}
-					wIdx++
-				}
-				continue
-			}
-			interpolated = append(interpolated, l)
-		}
-		finalWith = strings.Join(interpolated, "\n")
-	}
-
-	overallStart := spans[0].start
-	overallEnd := spans[len(spans)-1].end
-	return spliceLines(contentLines, overallStart, overallEnd, finalWith), nil
-}
-
-func checkSegmentMatch(candidate, pattern []string) bool {
-	if len(candidate) != len(pattern) {
-		return false
-	}
-	for i := 0; i < len(pattern); i++ {
-		pTrim := strings.TrimRight(pattern[i], " \t\r")
-		cTrim := strings.TrimRight(candidate[i], " \t\r")
-		if pTrim != cTrim && strings.TrimSpace(pTrim) != strings.TrimSpace(cTrim) {
-			return false
-		}
-	}
-	return true
-}
-
-func matchLinesTrailing(contentLines, searchLines []string, with string) (string, bool) {
-	for i := 0; i <= len(contentLines)-len(searchLines); i++ {
+	for i := 0; i <= len(cLines)-len(cleanSLines); i++ {
 		matched := true
-		for j := 0; j < len(searchLines); j++ {
-			if strings.TrimRight(contentLines[i+j], " \t\r") != strings.TrimRight(searchLines[j], " \t\r") {
+		for j := 0; j < len(cleanSLines); j++ {
+			if strings.TrimSpace(cLines[i+j]) != strings.TrimSpace(cleanSLines[j]) {
 				matched = false
 				break
 			}
 		}
 		if matched {
-			return spliceLines(contentLines, i, i+len(searchLines), with), true
-		}
-	}
-	return "", false
-}
-
-func matchLinesIndentation(contentLines, searchLines []string, with string) (string, bool) {
-	if len(searchLines) == 0 {
-		return "", false
-	}
-
-	for i := 0; i <= len(contentLines)-len(searchLines); i++ {
-		sFirstTrim := strings.TrimSpace(searchLines[0])
-		cFirstTrim := strings.TrimSpace(contentLines[i])
-
-		if sFirstTrim == "" || sFirstTrim != cFirstTrim {
-			continue
-		}
-
-		matched := true
-		for j := 1; j < len(searchLines); j++ {
-			if strings.TrimSpace(contentLines[i+j]) != strings.TrimSpace(searchLines[j]) {
-				matched = false
-				break
+			var out []string
+			out = append(out, cLines[:i]...)
+			out = append(out, with)
+			if i+len(cleanSLines) < len(cLines) {
+				out = append(out, cLines[i+len(cleanSLines):]...)
 			}
-		}
-
-		if matched {
-			return spliceLines(contentLines, i, i+len(searchLines), with), true
+			return strings.Join(out, "\n"), nil
 		}
 	}
-	return "", false
-}
 
-func replaceFromTo(content, from, to, with string) (string, error) {
-	lines := strings.Split(content, "\n")
-	fromIdx := -1
-	toIdx := -1
-
-	fromLower := strings.ToLower(from)
-	toLower := strings.ToLower(to)
-
-	for i, l := range lines {
-		lLower := strings.ToLower(l)
-		if fromIdx == -1 {
-			if strings.Contains(lLower, fromLower) {
-				fromIdx = i
-			}
-		} else {
-			if strings.Contains(lLower, toLower) {
-				toIdx = i + 1
-				break
+	if fix {
+		// Fuzzy search fallback
+		for i := 0; i < len(cLines); i++ {
+			if strings.Contains(strings.TrimSpace(cLines[i]), strings.TrimSpace(cleanSLines[0])) {
+				var out []string
+				out = append(out, cLines[:i]...)
+				out = append(out, with)
+				endIdx := i + len(cleanSLines)
+				if endIdx > len(cLines) {
+					endIdx = len(cLines)
+				}
+				out = append(out, cLines[endIdx:]...)
+				return strings.Join(out, "\n"), nil
 			}
 		}
 	}
 
-	if fromIdx == -1 {
-		return "", fmt.Errorf("starting pattern %q not found", from)
-	}
-	if toIdx == -1 {
-		return "", fmt.Errorf("ending pattern %q not found after %q", to, from)
-	}
-
-	return spliceLines(lines, fromIdx, toIdx, with), nil
+	return "", fmt.Errorf("search block not matched:\n%s", search)
 }
 
-func insertAnchor(content, anchor, with string, after bool) (string, error) {
-	lines := strings.Split(content, "\n")
-	targetIdx := -1
-	aLower := strings.ToLower(anchor)
-
-	for i, l := range lines {
-		if strings.Contains(strings.ToLower(l), aLower) {
-			targetIdx = i
-			break
-		}
-	}
-
-	if targetIdx == -1 {
-		return "", fmt.Errorf("anchor pattern %q not found", anchor)
-	}
-
-	splicePoint := targetIdx
-	if after {
-		splicePoint = targetIdx + 1
-	}
-
-	return spliceLines(lines, splicePoint, splicePoint, with), nil
-}
-
-func replaceLines(content, rangeStr, with string) (string, error) {
-	ranges := scanner.ParseLineRanges(rangeStr)
-	if len(ranges) == 0 {
-		return "", fmt.Errorf("invalid line range %q", rangeStr)
-	}
-
-	lines := strings.Split(content, "\n")
-	r := ranges[0]
-
-	start := r.Start - 1
-	end := r.End
-	if start < 0 {
-		start = 0
-	}
-	if end <= 0 || end > len(lines) {
-		end = len(lines)
-	}
-	if start > end {
-		return "", fmt.Errorf("start line %d greater than end line %d", r.Start, r.End)
-	}
-
-	return spliceLines(lines, start, end, with), nil
-}
-
-func spliceLines(lines []string, start, end int, replacement string) string {
+func filterEmpty(lines []string) []string {
 	var out []string
-	out = append(out, lines[:start]...)
-	if replacement != "" {
-		out = append(out, replacement)
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			out = append(out, l)
+		}
 	}
-	out = append(out, lines[end:]...)
-	return strings.Join(out, "\n")
+	return out
 }

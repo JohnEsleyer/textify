@@ -2,10 +2,13 @@ package parser
 
 import (
 	"bytes"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -59,9 +62,20 @@ func parseGoFunc(fset *token.FileSet, fn *ast.FuncDecl, filePath string, lines [
 	fn.Body = origBody
 	sig := strings.TrimSpace(sigBuf.String())
 
-	// Collect calls made inside this function.
 	var calls []string
 	callSet := make(map[string]bool)
+	var refs []string
+	refSet := make(map[string]bool)
+
+	if fn.Type != nil {
+		if fn.Type.Params != nil {
+			collectGoFieldListRefs(fn.Type.Params, refSet, &refs)
+		}
+		if fn.Type.Results != nil {
+			collectGoFieldListRefs(fn.Type.Results, refSet, &refs)
+		}
+	}
+
 	if fn.Body != nil {
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			if call, ok := n.(*ast.CallExpr); ok {
@@ -78,21 +92,20 @@ func parseGoFunc(fset *token.FileSet, fn *ast.FuncDecl, filePath string, lines [
 	body := sliceLines(lines, startPos.Line, endPos.Line)
 
 	return Symbol{
-		Name:      fn.Name.Name,
-		Receiver:  receiver,
-		Kind:      kind,
-		File:      filePath,
-		StartLine: startPos.Line,
-		EndLine:   endPos.Line,
-		Signature: sig,
-		Body:      body,
-		Calls:     calls,
+		Name:       fn.Name.Name,
+		Receiver:   receiver,
+		Kind:       kind,
+		File:       filePath,
+		StartLine:  startPos.Line,
+		EndLine:    endPos.Line,
+		Signature:  sig,
+		Body:       body,
+		Calls:      calls,
+		References: refs,
 	}
 }
 
 func parseGoType(fset *token.FileSet, genDecl *ast.GenDecl, typeSpec *ast.TypeSpec, filePath string, lines []string) Symbol {
-	// In a grouped type declaration ("type ( A struct{}; B struct{} )")
-	// use the individual spec bounds instead of the whole group.
 	start := genDecl.Pos()
 	if len(genDecl.Specs) > 1 {
 		start = typeSpec.Pos()
@@ -155,9 +168,6 @@ func parseGoType(fset *token.FileSet, genDecl *ast.GenDecl, typeSpec *ast.TypeSp
 	}
 }
 
-// collectGoTypeRefs walks a Go type expression and records user types it
-// depends on. Built-in types are intentionally skipped so dependency traces
-// stay readable.
 func collectGoTypeRefs(expr ast.Expr, seen map[string]bool, refs *[]string) {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -257,4 +267,182 @@ func sliceLines(lines []string, start, end int) string {
 		return ""
 	}
 	return strings.Join(lines[start-1:end], "\n")
+}
+
+// CleanCaseTarget strips prefix/suffix boilerplate from switch-case queries.
+func CleanCaseTarget(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "case ")
+	s = strings.TrimSuffix(s, ":")
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "*")
+	return s
+}
+
+// ExtractCase extracts the body, start line, and end line of a switch-case clause
+// from a Go file (using AST) or any other file (using generic fallback).
+func ExtractCase(filePath, content, fnName, caseTarget string) (string, int, int, error) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext == ".go" {
+		body, s, e, err := ExtractGoCase(filePath, content, fnName, caseTarget)
+		if err == nil {
+			return body, s, e, nil
+		}
+	}
+	return ExtractGenericCase(content, fnName, caseTarget)
+}
+
+// ExtractGoCase inspects the Go AST to find and slice a specific CaseClause.
+func ExtractGoCase(filePath, content, fnName, caseTarget string) (string, int, int, error) {
+	fset := token.NewFileSet()
+	fileNode, err := parser.ParseFile(fset, filePath, []byte(content), parser.ParseComments)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("parse Go AST: %w", err)
+	}
+
+	cleanTarget := CleanCaseTarget(caseTarget)
+	cleanFn := strings.TrimSpace(fnName)
+	cleanFn = strings.TrimPrefix(cleanFn, "*")
+
+	lines := strings.Split(content, "\n")
+	type caseMatch struct {
+		startLine int
+		endLine   int
+	}
+	var found *caseMatch
+
+	for _, decl := range fileNode.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+
+		if cleanFn != "" {
+			receiver := ""
+			if fn.Recv != nil && len(fn.Recv.List) > 0 {
+				var buf bytes.Buffer
+				_ = printer.Fprint(&buf, fset, fn.Recv.List[0].Type)
+				receiver = strings.TrimSpace(buf.String())
+			}
+			fullName := fn.Name.Name
+			if receiver != "" {
+				fullName = strings.TrimPrefix(receiver, "*") + "." + fn.Name.Name
+			}
+			if fn.Name.Name != cleanFn && fullName != cleanFn && !strings.HasSuffix(fullName, "."+cleanFn) {
+				continue
+			}
+		}
+
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if found != nil {
+				return false
+			}
+
+			var bodyList []ast.Stmt
+			var switchEnd token.Pos
+
+			switch sw := n.(type) {
+			case *ast.SwitchStmt:
+				if sw.Body != nil {
+					bodyList = sw.Body.List
+					switchEnd = sw.Body.End()
+				}
+			case *ast.TypeSwitchStmt:
+				if sw.Body != nil {
+					bodyList = sw.Body.List
+					switchEnd = sw.Body.End()
+				}
+			}
+
+			if len(bodyList) == 0 {
+				return true
+			}
+
+			for idx, stmt := range bodyList {
+				cc, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+
+				matched := false
+				if cleanTarget == "default" && len(cc.List) == 0 {
+					matched = true
+				} else {
+					for _, expr := range cc.List {
+						var buf bytes.Buffer
+						_ = printer.Fprint(&buf, fset, expr)
+						exprStr := CleanCaseTarget(buf.String())
+						if exprStr == cleanTarget || strings.HasSuffix(exprStr, "."+cleanTarget) || strings.EqualFold(exprStr, cleanTarget) {
+							matched = true
+							break
+						}
+					}
+				}
+
+				if matched {
+					sLine := fset.Position(cc.Pos()).Line
+					eLine := 0
+					if idx+1 < len(bodyList) {
+						eLine = fset.Position(bodyList[idx+1].Pos()).Line - 1
+					} else {
+						eLine = fset.Position(switchEnd).Line - 1
+					}
+					if eLine < sLine {
+						eLine = sLine
+					}
+
+					found = &caseMatch{
+						startLine: sLine,
+						endLine:   eLine,
+					}
+					return false
+				}
+			}
+
+			return true
+		})
+
+		if found != nil {
+			break
+		}
+	}
+
+	if found == nil {
+		return "", 0, 0, fmt.Errorf("case target %q not found in AST of %s", caseTarget, filePath)
+	}
+
+	body := sliceLines(lines, found.startLine, found.endLine)
+	return body, found.startLine, found.endLine, nil
+}
+
+// ExtractGenericCase is a line-based regex fallback for case clause extraction.
+func ExtractGenericCase(content, fnName, caseTarget string) (string, int, int, error) {
+	lines := strings.Split(content, "\n")
+	target := CleanCaseTarget(caseTarget)
+
+	casePattern := regexp.MustCompile(`(?i)^\s*(?:case\s+.*` + regexp.QuoteMeta(target) + `.*:|default\s*:)`)
+	matchIdx := -1
+
+	for i, l := range lines {
+		if casePattern.MatchString(l) {
+			matchIdx = i
+			break
+		}
+	}
+
+	if matchIdx == -1 {
+		return "", 0, 0, fmt.Errorf("case target %q not found", caseTarget)
+	}
+
+	endIdx := len(lines)
+	for i := matchIdx + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "case ") || strings.HasPrefix(trimmed, "default:") || trimmed == "}" {
+			endIdx = i
+			break
+		}
+	}
+
+	body := sliceLines(lines, matchIdx+1, endIdx)
+	return body, matchIdx + 1, endIdx, nil
 }
