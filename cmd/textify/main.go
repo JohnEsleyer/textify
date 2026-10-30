@@ -15,21 +15,24 @@ import (
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.7.0"
+const version = "0.8.0"
 
 const defaultPrompt = `You are interacting with a codebase managed by Textify.
 
-When you need to inspect code, respond using XML request directives:
-- Load full file: <file path="path/to/file.ext" />
-- Load specific lines: <file path="path/to/file.ext" lines="10-50,80-120" />
-- Search text: <file path="path/to/file.ext" search="functionName" context="10" />
-- Delimited block: <file path="path/to/file.ext" from="startPattern" to="endPattern" />
-- Symbol definition: <def name="SymbolName" [path="path/to/file.ext"] />
-- Execution trace: <trace symbol="FuncName" depth="2" />
+CRITICAL INSTRUCTION FOR CONTEXT RETRIEVAL:
+Minimize consecutive round trips. Aim to finish all inspections in AT MOST 1 request before providing your solution.
+Do NOT request symbols or files one by one if they are part of a call chain.
+
+When inspecting code, use structural XML directives:
+- Deep Execution Trace: <trace symbol="FuncName" depth="2" />
+  (Automatically extracts the root function, bodies of called functions, and referenced structs in 1 shot)
 - Switch-case branch: <select path="path/to/file.ext" fn="funcName" case="caseValue" />
 - Struct methods: <select struct="StructName" methods="Method1,Method2" />
 - Cross-references: <xref symbol="SymbolName" action="read|write|call|all" />
+- Composite bundles: <feature-context lang="go"><target-type name="T"/><entrypoint symbol="S" depth="2"/></feature-context>
 - Project-wide search: <grep pattern="keyword" [context="10"] [glob="*.go"] />
+- Load specific lines: <file path="path/to/file.ext" lines="10-50,80-120" />
+- Clean patch-ready anchors: Add for-patch="true" to any directive to strip line numbers
 
 When returning code modifications, format changes using atomic patch directives:
 - Create/overwrite file:
@@ -156,12 +159,10 @@ func normalizeFlagArgs(args []string, valueFlags map[string]bool) []string {
 			continue
 		}
 		if strings.HasPrefix(arg, "-") && len(arg) > 2 && !strings.Contains(arg, "=") {
-			// Check if it's a known multi-char single dash flag (e.g. -ci, -lang, -depth)
 			if valueFlags[arg] || arg == "-ci" {
 				normalized = append(normalized, arg)
 				continue
 			}
-			// Expand grouped single-character flags like -cr into -c -r
 			chars := arg[1:]
 			allLetters := true
 			for _, ch := range chars {
@@ -560,7 +561,6 @@ func runLoad(args []string) {
 		}
 		rawInput = string(data)
 	} else {
-		// Read from standard input if piped
 		stat, _ := os.Stdin.Stat()
 		if (stat.Mode() & os.ModeCharDevice) == 0 {
 			data, err := io.ReadAll(os.Stdin)
