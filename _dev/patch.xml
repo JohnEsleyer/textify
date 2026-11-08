@@ -1,17 +1,29 @@
-<replace path="internal/config/config.go">
+<replace path="internal/scanner/scanner.go">
 <search>
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/JohnEsleyer/textify/internal/config"
+	"github.com/JohnEsleyer/textify/internal/fileutil"
 )
 </search>
 <with>
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/JohnEsleyer/textify/internal/config"
+	"github.com/JohnEsleyer/textify/internal/fileutil"
 )
 </with>
 </replace>

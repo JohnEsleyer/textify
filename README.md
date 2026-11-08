@@ -407,8 +407,9 @@ func main() {}
 | :--- | :--- |
 | `textify init` | Scans workspace and creates `textify.yaml`. |
 | `textify scan` | Discovers new folders and appends them to `textify.yaml`. |
-| `textify start [flags]` | Bundles full project codebase into context file. |
+| `textify start [flags]` | Bundles full project codebase into context file (`--full` to force full code). |
 | `textify signatures, sig [flags]` | Extracts types, structs, interfaces, and function headers. |
+| `textify tokens, dirs [flags]` | Lists included folders and estimated token sizes (largest to smallest). |
 | `textify diff [flags]` | Bundles only modified, staged, or untracked Git files. |
 | `textify trace <symbol> [flags]` | Traces function call flow and callee implementations (`--deep`, `--depth`). |
 | `textify def <symbol> [flags]` | Extracts AST definition of function/struct/class (Go/TypeScript). |

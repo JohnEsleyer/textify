@@ -94,6 +94,8 @@ func main() {
 		runStart(args)
 	case "signatures", "sig":
 		runSignatures(args)
+	case "tokens", "folders", "dirs", "sizes", "size":
+		runTokens(args)
 	case "diff":
 		runDiff(args)
 	case "grep":
@@ -129,6 +131,7 @@ Core Commands:
   scan                     Detect new directories and update textify.yaml
   start                    Bundle project codebase into context file
   signatures, sig          Export types, structs, interfaces, and function headers
+  tokens, dirs             List included folders and estimated token sizes (largest to smallest)
   diff                     Bundle only modified, staged, or untracked Git files
   grep <pattern>           Search codebase for pattern with context lines
   def <symbol>             Extract AST definition of function/struct/class
@@ -266,6 +269,7 @@ func runStart(args []string) {
 	redactFlag := fs.Bool("redact", false, "Redact sensitive tokens and secrets")
 	redactShort := fs.Bool("r", false, "Redact sensitive tokens and secrets (shorthand)")
 	treeFlag := fs.Bool("tree", false, "Prepend directory tree")
+	fullFlag := fs.Bool("full", false, "Force full code extraction for all files (ignore signatures groups)")
 	sigGroupsFlag := fs.String("signatures-groups", "", "Comma-separated group names for signatures only")
 	sigGroupsShort := fs.String("sig-groups", "", "Comma-separated group names for signatures only (shorthand)")
 	fullGroupsFlag := fs.String("full-groups", "", "Comma-separated group names for full code")
@@ -292,6 +296,7 @@ func runStart(args []string) {
 		tree:             *treeFlag,
 		signaturesOnly:   false,
 		diffOnly:         false,
+		forceFull:        *fullFlag,
 		signaturesGroups: splitCommaList(firstNonEmpty(*sigGroupsFlag, *sigGroupsShort)),
 		fullCodeGroups:   splitCommaList(firstNonEmpty(*fullGroupsFlag, *fullGroupsShort)),
 		targetGroups:     splitCommaList(firstNonEmpty(*groupFlag, *groupsFlag)),
@@ -761,6 +766,88 @@ func runPrompt(args []string) {
 	}
 }
 
+func runTokens(args []string) {
+	fs := flag.NewFlagSet("tokens", flag.ExitOnError)
+	configPath := fs.String("config", "textify.yaml", "Configuration file path")
+	clipFlag := fs.Bool("clip", false, "Copy output to clipboard")
+	clipShort := fs.Bool("c", false, "Copy output to clipboard (shorthand)")
+	stdoutFlag := fs.Bool("stdout", false, "Write output to stdout")
+	stdoutShort := fs.Bool("s", false, "Write output to stdout (shorthand)")
+	fullFlag := fs.Bool("full", false, "Calculate tokens with full code for all files")
+	sigFlag := fs.Bool("signatures", false, "Calculate tokens with signatures only for all files")
+	sigShort := fs.Bool("sig", false, "Calculate tokens with signatures only (shorthand)")
+	groupFlag := fs.String("group", "", "Only include directories/files in specific group(s)")
+	groupsFlag := fs.String("groups", "", "Only include directories/files in specific group(s) (alias)")
+
+	valueFlags := map[string]bool{
+		"--config": true, "-config": true,
+		"--group": true, "-group": true, "--groups": true, "-groups": true,
+	}
+	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
+
+	_ = stdoutFlag
+	_ = stdoutShort
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg := config.DefaultConfig()
+	if _, err := os.Stat(*configPath); err == nil {
+		loaded, loadErr := config.Load(*configPath)
+		if loadErr == nil {
+			cfg = *loaded
+		}
+	}
+
+	stats, err := scanner.CalculateFolderTokens(cwd, &cfg, scanner.ScanOptions{
+		SignaturesOnly: *sigFlag || *sigShort,
+		ForceFull:      *fullFlag,
+		TargetGroups:   splitCommaList(firstNonEmpty(*groupFlag, *groupsFlag)),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error calculating folder tokens: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(stats) == 0 {
+		fmt.Println("No included folders or matching files found.")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Included Folders by Estimated Token Size:\n\n")
+	totalTokens := 0
+	totalFiles := 0
+	var totalBytes int64
+
+	for i, stat := range stats {
+		totalTokens += stat.ApproxTokens
+		totalFiles += stat.FilesCount
+		totalBytes += stat.TotalBytes
+		fileWord := "files"
+		if stat.FilesCount == 1 {
+			fileWord = "file"
+		}
+		sb.WriteString(fmt.Sprintf("%2d. %s - ~%d tokens (%s, %d %s)\n", i+1, stat.Path, stat.ApproxTokens, formatBytes(stat.TotalBytes), stat.FilesCount, fileWord))
+	}
+
+	sb.WriteString(fmt.Sprintf("\nTotal: ~%d tokens across %d folder(s) (%d files, %s)\n", totalTokens, len(stats), totalFiles, formatBytes(totalBytes)))
+
+	output := sb.String()
+	fmt.Print(output)
+
+	if *clipFlag || *clipShort {
+		if clipErr := fileutil.CopyToClipboard(output); clipErr == nil {
+			fmt.Fprintln(os.Stderr, "✔ Folder token list copied to clipboard!")
+		} else {
+			fmt.Fprintf(os.Stderr, "Notice: Could not copy to clipboard (%v)\n", clipErr)
+		}
+	}
+}
+
 type scanCmdParams struct {
 	configPath       string
 	format           string
@@ -770,6 +857,7 @@ type scanCmdParams struct {
 	tree             bool
 	signaturesOnly   bool
 	diffOnly         bool
+	forceFull        bool
 	signaturesGroups []string
 	fullCodeGroups   []string
 	targetGroups     []string
@@ -812,6 +900,7 @@ func executeScan(p scanCmdParams) {
 	scanRes, err := scanner.Scan(cwd, &cfg, writer, scanner.ScanOptions{
 		SignaturesOnly:   p.signaturesOnly,
 		DiffOnly:         p.diffOnly,
+		ForceFull:        p.forceFull,
 		Format:           p.format,
 		RedactSecrets:    p.redact,
 		Tree:             p.tree,

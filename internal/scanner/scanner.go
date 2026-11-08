@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/JohnEsleyer/textify/internal/config"
@@ -16,6 +17,7 @@ import (
 type ScanOptions struct {
 	SignaturesOnly   bool
 	DiffOnly         bool
+	ForceFull        bool
 	Format           string
 	MaxFileSize      int64
 	RedactSecrets    bool
@@ -343,6 +345,14 @@ func shouldExtractSignatures(relPath string, group string, globalSigsOnly bool, 
 		return false
 	}
 
+	if opts.ForceFull {
+		return false
+	}
+
+	if globalSigsOnly {
+		return true
+	}
+
 	if group != "" {
 		if containsCaseInsensitive(opts.SignaturesGroups, group) {
 			return true
@@ -360,7 +370,7 @@ func shouldExtractSignatures(relPath string, group string, globalSigsOnly bool, 
 		}
 	}
 
-	return globalSigsOnly
+	return false
 }
 
 func containsCaseInsensitive(slice []string, item string) bool {
@@ -482,4 +492,92 @@ func isMinified(content []byte) bool {
 		}
 	}
 	return lineLen > 2000
+}
+
+// FolderTokenStat represents the estimated token size of an included folder.
+type FolderTokenStat struct {
+	Path         string
+	TotalBytes   int64
+	ApproxTokens int
+	FilesCount   int
+}
+
+// CalculateFolderTokens scans included files and aggregates token estimates by folder from largest to smallest.
+func CalculateFolderTokens(rootPath string, cfg *config.Config, opts ScanOptions) ([]FolderTokenStat, error) {
+	chain := config.NewGitIgnoreChain(rootPath)
+
+	rootRule, ok := cfg.Dirs["."]
+	if !ok {
+		rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
+	}
+
+	var changedFiles map[string]bool
+	if opts.DiffOnly {
+		var err error
+		changedFiles, err = GetGitChangedFiles(rootPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get git diff status: %w", err)
+		}
+	}
+
+	var matchedFiles []string
+	if err := collectFiles(rootPath, rootPath, cfg, chain, changedFiles, opts.TargetGroups, &matchedFiles); err != nil {
+		return nil, err
+	}
+
+	format := "tags"
+	if cfg.Format != "" {
+		format = cfg.Format
+	}
+	if opts.Format != "" {
+		format = opts.Format
+	}
+
+	maxSize := cfg.MaxFileSize
+	if maxSize <= 0 {
+		maxSize = 500 * 1024
+	}
+	if opts.MaxFileSize > 0 {
+		maxSize = opts.MaxFileSize
+	}
+
+	folderMap := make(map[string]*FolderTokenStat)
+
+	for _, relPath := range matchedFiles {
+		absPath := filepath.Join(rootPath, filepath.FromSlash(relPath))
+		rule := resolveEffectiveRule(relPath, cfg, rootRule)
+
+		useSignatures := shouldExtractSignatures(relPath, rule.Group, opts.SignaturesOnly, cfg, opts)
+		addedBytes, _, err := appendFileContent(absPath, relPath, rule, bufio.NewWriter(io.Discard), useSignatures, format, maxSize, opts.RedactSecrets)
+		if err != nil {
+			continue
+		}
+
+		dir := filepath.ToSlash(filepath.Dir(relPath))
+		stat, exists := folderMap[dir]
+		if !exists {
+			stat = &FolderTokenStat{Path: dir}
+			folderMap[dir] = stat
+		}
+		stat.TotalBytes += addedBytes
+		stat.FilesCount++
+	}
+
+	stats := make([]FolderTokenStat, 0, len(folderMap))
+	for _, stat := range folderMap {
+		stat.ApproxTokens = int(stat.TotalBytes / 4)
+		stats = append(stats, *stat)
+	}
+
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].ApproxTokens != stats[j].ApproxTokens {
+			return stats[i].ApproxTokens > stats[j].ApproxTokens
+		}
+		if stats[i].TotalBytes != stats[j].TotalBytes {
+			return stats[i].TotalBytes > stats[j].TotalBytes
+		}
+		return stats[i].Path < stats[j].Path
+	})
+
+	return stats, nil
 }

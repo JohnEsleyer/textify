@@ -406,6 +406,7 @@ func (u *User) Save() bool {
 	assertNotContains(t, outStart, "return true")
 
 	// 2. Scan with SignaturesOnly = true (like textify signatures)
+	// Must be full signatures only regardless of what textify.yaml says
 	buf.Reset()
 	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, SignaturesOnly: true})
 	if err != nil {
@@ -413,12 +414,23 @@ func (u *User) Save() bool {
 	}
 	outSigs := buf.String()
 
-	// Controllers (api group) is explicitly in full_code_groups, so it remains full code
-	assertContains(t, outSigs, "return \"full_ctrl_body\"")
-	// Models remains signatures only
+	assertContains(t, outSigs, "func GetUser() string")
+	assertNotContains(t, outSigs, "return \"full_ctrl_body\"")
+	assertContains(t, outSigs, "func (u *User) Save() bool")
 	assertNotContains(t, outSigs, "return true")
 
-	// 3. Scan with TargetGroups filter (like textify start --group api)
+	// 3. Scan with ForceFull = true (like textify start --full)
+	buf.Reset()
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, ForceFull: true})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	outFull := buf.String()
+
+	assertContains(t, outFull, "return \"full_ctrl_body\"")
+	assertContains(t, outFull, "return true")
+
+	// 4. Scan with TargetGroups filter (like textify start --group api)
 	buf.Reset()
 	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, TargetGroups: []string{"api"}})
 	if err != nil {
@@ -427,6 +439,53 @@ func (u *User) Save() bool {
 	outFiltered := buf.String()
 	assertContains(t, outFiltered, "controllers/user.go")
 	assertNotContains(t, outFiltered, "models/user.go")
+}
+
+func TestCalculateFolderTokens(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_tokens_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	os.MkdirAll(filepath.Join(tempDir, "big"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "small"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "ignored"), 0755)
+
+	createFile(t, tempDir, "big/large.go", strings.Repeat("func LongCode() {\n\tprintln(1)\n}\n", 100))
+	createFile(t, tempDir, "small/short.go", "package small\nfunc Mini() {}\n")
+	createFile(t, tempDir, "ignored/skip.go", "package ignored\n")
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled: true,
+			},
+			"ignored": {
+				Enabled: false,
+			},
+		},
+	}
+
+	stats, err := CalculateFolderTokens(tempDir, cfg, ScanOptions{})
+	if err != nil {
+		t.Fatalf("CalculateFolderTokens failed: %v", err)
+	}
+
+	if len(stats) != 2 {
+		t.Fatalf("expected 2 folders, got %d", len(stats))
+	}
+
+	if stats[0].Path != "big" {
+		t.Errorf("expected largest folder to be 'big', got %q", stats[0].Path)
+	}
+	if stats[1].Path != "small" {
+		t.Errorf("expected second folder to be 'small', got %q", stats[1].Path)
+	}
+	if stats[0].ApproxTokens <= stats[1].ApproxTokens {
+		t.Errorf("expected 'big' tokens (%d) > 'small' tokens (%d)", stats[0].ApproxTokens, stats[1].ApproxTokens)
+	}
 }
 
 func TestSubdirectoryInheritsExtensionsAndExcludes(t *testing.T) {
