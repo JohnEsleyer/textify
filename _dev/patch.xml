@@ -1,29 +1,149 @@
-<replace path="internal/scanner/scanner.go">
+<replace path="README.md" within="">
 <search>
-import (
-	"bufio"
-	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
+## ⚙️ Configuration & Directory Grouping (`textify.yaml`)
 
-	"github.com/JohnEsleyer/textify/internal/config"
-	"github.com/JohnEsleyer/textify/internal/fileutil"
-)
+Directories can be tagged with an optional `group` property in `textify.yaml`. You can configure which groups export lightweight symbol signatures versus full source code, saving tokens while preserving implementation details where needed:
+
+```yaml
+# textify.yaml
+output_file: codebase.txt
+format: tags
+
+# Specify group extraction modes
+signatures_groups:
+  - models
+  - generated
+
+full_code_groups:
+  - core
+  - api
+
+# Or configure modes via the groups map:
+groups:
+  helpers: signatures
+  services: full
+
+dirs:
+  cmd/api:
+    enabled: true
+    group: api
+
+  internal/core:
+    enabled: true
+    group: core
+
+  internal/models:
+    enabled: true
+    group: models
+
+  internal/generated:
+    enabled: true
+    group: generated
+```
+
+When running `textify start`, directories in `signatures_groups` have function bodies stripped, while `full_code_groups` include complete implementations.
+
+You can also filter or override groups dynamically from the CLI:
+
+```bash
+# Bundle only directories and files belonging to a specific group
+textify start --group=core -c
+
+# Bundle with custom signature and full-code groups
+textify start --signatures-groups=models,helpers --full-groups=api
+```
 </search>
 <with>
-import (
-	"bufio"
-	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
+## ⚙️ Configuration, File Filtering & Directory Grouping (`textify.yaml`)
 
-	"github.com/JohnEsleyer/textify/internal/config"
-	"github.com/JohnEsleyer/textify/internal/fileutil"
-)
+Textify supports fine-grained control over which files and folders are bundled, filtered, or extracted via `textify.yaml`. 
+
+### Complete Configuration Schema
+
+When you run `textify init`, Textify auto-discovers your directory tree, detects visible file extensions, and generates a fully documented `textify.yaml`:
+
+```yaml
+# Textify Configuration
+#
+# output_file: Path where the merged codebase text will be saved.
+# format:      Output format ("raw", "markdown", or "tags")
+# tree:        Prepend ASCII directory tree (default true)
+# max_file_size: File size limit in bytes (default 500KB)
+# dirs:        Directory-specific configurations. Keys are paths relative to root.
+
+output_file: codebase.txt
+format: tags
+tree: true
+max_file_size: 512000
+
+# Group extraction modes (Signatures vs Full Code)
+signatures_groups:
+  - models
+  - generated
+
+full_code_groups:
+  - core
+  - api
+
+groups:
+  helpers: signatures
+  services: full
+
+dirs:
+  .:
+    enabled: true
+    extensions:
+      - go
+      - md
+      - yaml
+    exclude_extensions:
+      - log
+      - tmp
+    include:
+      - .env.example
+    exclude:
+      - obsolete.go
+
+  cmd/api:
+    enabled: true
+    group: api
+
+  internal/core:
+    enabled: true
+    group: core
+    compact: true
+```
+
+### Rule & Filtering Options per Directory (`dirs`)
+
+Every directory rule supports the following properties:
+- **`enabled`** *(bool)*: If `false`, this directory and its subdirectories are completely skipped during scans.
+- **`compact`** *(bool)*: If `true`, strips extra whitespace and non-essential blank lines to conserve LLM tokens.
+- **`group`** *(string)*: Assigns the directory to a named group (e.g., `api`, `models`, `core`).
+- **`extensions`** *(list)*: Allow-list of file extensions (e.g., `[go, ts, md]`). If empty, all non-binary text files are considered.
+- **`exclude_extensions`** *(list)*: Block-list of file extensions to ignore (e.g., `[log, tmp, lock]`).
+- **`include`** *(list)*: Specific files or glob patterns to **Force Include**, overriding gitignore rules and extension filters.
+- **`exclude`** *(list)*: Specific files or glob patterns to **Force Exclude** (takes highest precedence).
+
+### Rule Precedence Order
+When Textify scans files, rules are evaluated in this exact priority:
+1. **System exclusions** (`.git`, `textify.yaml`, output file).
+2. **Force exclusions** (`exclude` rules).
+3. **Force inclusions** (`include` rules — overrides gitignore and extension filters).
+4. **Gitignore rules** (root and subfolder `.gitignore` files).
+5. **Extension block-lists** (`exclude_extensions`).
+6. **Extension allow-lists** (`extensions`).
+
+### Group Extraction Modes
+When running `textify start`, directories tagged with `signatures_groups` or group mode `signatures` have function bodies stripped, while `full_code_groups` include complete implementations.
+
+You can also filter or override groups dynamically from the CLI:
+```bash
+# Bundle only directories and files belonging to a specific group
+textify start --group=core -c
+
+# Bundle with custom signature and full-code groups
+textify start --signatures-groups=models,helpers --full-groups=api
+```
 </with>
 </replace>
