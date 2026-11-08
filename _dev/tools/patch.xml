@@ -1,0 +1,2045 @@
+The patch failed because line 148 of `README.md` has two hidden trailing spaces (`  ` for markdown linebreaks), which caused an exact string mismatch in the existing patcher engine.
+
+Here is the updated patch. It fixes that trailing-space mismatch in `README.md`, and also updates `internal/patcher/patcher.go` so that `textify patch` ignores trailing spaces on all lines in future patches.
+
+Save this to `dev/patch.txt` (or pipe it to `textify patch`):
+
+```xml
+<replace path="internal/scanner/request.go">
+<search>
+// FileRequest describes a target file and specific sub-slices or queries requested.
+type FileRequest struct {
+	Path       string
+	Ranges     []LineRange
+	Start      int // Legacy compatibility (first range start)
+	End        int // Legacy compatibility (first range end)
+	Symbols    []string
+	Query      string // Text or regex pattern to search for
+	Context    int    // Context lines around query matches (default 10)
+	Glob       string // Glob pattern to match multiple files
+	From       string // Start pattern for block extraction
+	To         string // End pattern for block extraction
+	Anchor     string // Anchor pattern
+	Def        string // Exact symbol definition requested via AST
+	Trace      bool   // Trace execution flow
+	Depth      int    // Trace depth
+	Case       string // AST switch-case branch selector
+	Fn         string // Function containing the switch-case
+	Struct     string // Struct name for method selection
+	Methods    []string
+	XRef       string // Cross-reference symbol
+	XRefAction string // "write", "read", "call", "all"
+	ForPatch   bool   // Output ready-to-use block without line numbers
+	FeatureCtx *FeatureContextReq
+}
+
+var (
+	xmlTagRegex            = regexp.MustCompile(`(?i)<(?:file|slice|read|get)\s+([^>]+?)(?:/>|>.*?</(?:file|slice|read|get)>|>)`)
+	xmlGrepRegex           = regexp.MustCompile(`(?i)<(?:grep|search|find)\s+([^>]+?)(?:/>|>.*?</(?:grep|search|find)>|>)`)
+	xmlDefRegex            = regexp.MustCompile(`(?i)<(?:def|definition)\s+([^>]+?)(?:/>|>.*?</(?:def|definition)>|>)`)
+	xmlTraceRegex          = regexp.MustCompile(`(?i)<(?:trace|flow)\s+([^>]+?)(?:/>|>.*?</(?:trace|flow)>|>)`)
+	xmlSelectRegex         = regexp.MustCompile(`(?i)<(?:select|case)\s+([^>]+?)(?:/>|>.*?</(?:select|case)>|>)`)
+	xmlXrefRegex           = regexp.MustCompile(`(?i)<(?:xref|deps-of|references)\s+([^>]+?)(?:/>|>.*?</(?:xref|deps-of|references)>|>)`)
+	xmlFeatureContextRegex = regexp.MustCompile(`(?is)<feature-context(?:\s+([^>]*))?>(.*?)</feature-context>`)
+
+	xmlAttrTrace    = regexp.MustCompile(`(?i)\btrace=["']?(true|false|1|0)["']?`)
+	xmlAttrName     = regexp.MustCompile(`(?i)\b(?:name|symbol|struct|func|id|pattern)=["']([^"']+)["']`)
+	xmlAttrDef      = regexp.MustCompile(`(?i)\b(?:def|definition)=["']([^"']+)["']`)
+	xmlAttrPath     = regexp.MustCompile(`(?i)\b(?:path|file|src)=["']([^"']+)["']`)
+	xmlAttrLines    = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
+	xmlAttrSymbols  = regexp.MustCompile(`(?i)\bsymbols?=["']([^"']+)["']`)
+	xmlAttrSearch   = regexp.MustCompile(`(?i)\b(?:search|grep|query|pattern|find|around)=["']([^"']+)["']`)
+	xmlAttrFrom     = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	xmlAttrTo       = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
+	xmlAttrAnchor   = regexp.MustCompile(`(?i)\banchor=["']([^"']+)["']`)
+	xmlAttrContext  = regexp.MustCompile(`(?i)\bcontext=["'](\d+)["']`)
+	xmlAttrGlob     = regexp.MustCompile(`(?i)\bglob=["']([^"']+)["']`)
+	xmlAttrForPatch = regexp.MustCompile(`(?i)\b(?:for-patch|anchors|patch-ready)=["']?(true|false|1|0)["']?`)
+	xmlAttrCase     = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
+	xmlAttrFn       = regexp.MustCompile(`(?i)\b(?:fn|func|function|method)=["']([^"']+)["']`)
+	xmlAttrStruct   = regexp.MustCompile(`(?i)\b(?:struct|class)=["']([^"']+)["']`)
+	xmlAttrMethods  = regexp.MustCompile(`(?i)\bmethods=["']([^"']+)["']`)
+	xmlAttrDepth    = regexp.MustCompile(`(?i)\bdepth=["'](\d+)["']`)
+	xmlAttrLang     = regexp.MustCompile(`(?i)\blang(?:uage)?=["']([^"']+)["']`)
+	xmlAttrAction   = regexp.MustCompile(`(?i)\baction=["']([^"']+)["']`)
+
+	mdLinePattern = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+\.)(?:\s+\[[ xX]\])?\s+` + "`?" + `([^\s:` + "`" + `]+)` + "`?" + `(?:\s*[:(]\s*([^\r\n)]+)\)?)?`)
+)
+</search>
+<with>
+// FileRequest describes a target file and specific sub-slices or queries requested.
+type FileRequest struct {
+	Path       string
+	Ranges     []LineRange
+	Start      int // Legacy compatibility (first range start)
+	End        int // Legacy compatibility (first range end)
+	Symbols    []string
+	Query      string // Text or regex pattern to search for
+	Context    int    // Context lines around query matches (default 10)
+	Glob       string // Glob pattern to match multiple files
+	From       string // Start pattern for block extraction
+	To         string // End pattern for block extraction
+	Anchor     string // Anchor pattern
+	Def        string // Exact symbol definition requested via AST
+	Trace      bool   // Trace execution flow
+	Depth      int    // Trace depth
+	Case       string // AST switch-case branch selector
+	Fn         string // Function containing the switch-case
+	Struct     string // Struct name for method selection
+	Methods    []string
+	XRef       string // Cross-reference symbol
+	XRefAction string // "write", "read", "call", "all"
+	ForPatch   bool   // Output ready-to-use block without line numbers
+	FeatureCtx *FeatureContextReq
+	Signatures bool   // Signatures requested
+}
+
+var (
+	xmlTagRegex            = regexp.MustCompile(`(?i)<(?:file|slice|read|get)\s+([^>]+?)(?:/>|>.*?</(?:file|slice|read|get)>|>)`)
+	xmlGrepRegex           = regexp.MustCompile(`(?i)<(?:grep|search|find)\s*([^>]*?)(?:/>|>([\s\S]*?)</(?:grep|search|find)>)`)
+	xmlDefRegex            = regexp.MustCompile(`(?i)<(?:def|definition)\s*([^>]*?)(?:/>|>([\s\S]*?)</(?:def|definition)>)`)
+	xmlTraceRegex          = regexp.MustCompile(`(?i)<(?:trace|flow)\s*([^>]*?)(?:/>|>([\s\S]*?)</(?:trace|flow)>)`)
+	xmlSelectRegex         = regexp.MustCompile(`(?i)<(?:select|case)\s+([^>]+?)(?:/>|>.*?</(?:select|case)>|>)`)
+	xmlXrefRegex           = regexp.MustCompile(`(?i)<(?:xref|deps-of|references)\s*([^>]*?)(?:/>|>([\s\S]*?)</(?:xref|deps-of|references)>)`)
+	xmlFeatureContextRegex = regexp.MustCompile(`(?is)<feature-context(?:\s+([^>]*))?>(.*?)</feature-context>`)
+	xmlSignaturesRegex     = regexp.MustCompile(`(?i)<(?:signatures?|sigs?)\s*([^>]*?)(?:/>|>([\s\S]*?)</(?:signatures?|sigs?)>)`)
+
+	xmlAttrTrace      = regexp.MustCompile(`(?i)\btrace=["']?(true|false|1|0)["']?`)
+	xmlAttrName       = regexp.MustCompile(`(?i)\b(?:name|symbol|struct|func|id|pattern)=["']([^"']+)["']`)
+	xmlAttrDef        = regexp.MustCompile(`(?i)\b(?:def|definition)=["']([^"']+)["']`)
+	xmlAttrPath       = regexp.MustCompile(`(?i)\b(?:path|file|src)=["']([^"']+)["']`)
+	xmlAttrLines      = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
+	xmlAttrSymbols    = regexp.MustCompile(`(?i)\bsymbols?=["']([^"']+)["']`)
+	xmlAttrSearch     = regexp.MustCompile(`(?i)\b(?:search|grep|query|pattern|find|around)=["']([^"']+)["']`)
+	xmlAttrFrom       = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	xmlAttrTo         = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
+	xmlAttrAnchor     = regexp.MustCompile(`(?i)\banchor=["']([^"']+)["']`)
+	xmlAttrContext    = regexp.MustCompile(`(?i)\bcontext=["'](\d+)["']`)
+	xmlAttrGlob       = regexp.MustCompile(`(?i)\bglob=["']([^"']+)["']`)
+	xmlAttrForPatch   = regexp.MustCompile(`(?i)\b(?:for-patch|anchors|patch-ready)=["']?(true|false|1|0)["']?`)
+	xmlAttrCase       = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
+	xmlAttrFn         = regexp.MustCompile(`(?i)\b(?:fn|func|function|method)=["']([^"']+)["']`)
+	xmlAttrStruct     = regexp.MustCompile(`(?i)\b(?:struct|class)=["']([^"']+)["']`)
+	xmlAttrMethods    = regexp.MustCompile(`(?i)\bmethods=["']([^"']+)["']`)
+	xmlAttrDepth      = regexp.MustCompile(`(?i)\bdepth=["'](\d+)["']`)
+	xmlAttrLang       = regexp.MustCompile(`(?i)\blang(?:uage)?=["']([^"']+)["']`)
+	xmlAttrAction     = regexp.MustCompile(`(?i)\baction=["']([^"']+)["']`)
+	xmlAttrSignatures = regexp.MustCompile(`(?i)\b(?:signatures?|sigs?)=["']?(true|false|1|0)["']?`)
+
+	mdLinePattern = regexp.MustCompile(`(?m)^\s*(?:[-*+]|\d+\.)(?:\s+\[[ xX]\])?\s+` + "`?" + `([^\s:` + "`" + `]+)` + "`?" + `(?:\s*[:(]\s*([^\r\n)]+)\)?)?`)
+)
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+	// 2. <trace ... /> tags
+	for _, m := range xmlTraceRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		sym := ""
+		if sm := xmlAttrSymbols.FindStringSubmatch(attrs); len(sm) >= 2 {
+			sym = strings.TrimSpace(sm[1])
+		} else if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			sym = strings.TrimSpace(nm[1])
+		}
+		if sym == "" {
+			continue
+		}
+</search>
+<with>
+	// 1b. <signatures ... /> tags
+	for _, m := range xmlSignaturesRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		bodyText := ""
+		if len(m) >= 3 {
+			bodyText = strings.TrimSpace(m[2])
+		}
+
+		pathVal := ""
+		if pm := xmlAttrPath.FindStringSubmatch(attrs); len(pm) >= 2 {
+			pathVal = filepath.ToSlash(strings.TrimSpace(pm[1]))
+		} else if bodyText != "" && !strings.ContainsAny(bodyText, "<>") {
+			pathVal = filepath.ToSlash(bodyText)
+		}
+
+		globVal := ""
+		if gm := xmlAttrGlob.FindStringSubmatch(attrs); len(gm) >= 2 {
+			globVal = filepath.ToSlash(strings.TrimSpace(gm[1]))
+		}
+
+		forPatch := false
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			forPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+
+		req := FileRequest{
+			Path:       pathVal,
+			Glob:       globVal,
+			Signatures: true,
+			ForPatch:   forPatch,
+		}
+		key := fmt.Sprintf("SIGS|%s|%s|%t", pathVal, globVal, forPatch)
+		if !seen[key] {
+			seen[key] = true
+			requests = append(requests, req)
+		}
+	}
+
+	// 2. <trace ... /> tags
+	for _, m := range xmlTraceRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		bodyText := ""
+		if len(m) >= 3 {
+			bodyText = strings.TrimSpace(m[2])
+		}
+
+		sym := ""
+		if sm := xmlAttrSymbols.FindStringSubmatch(attrs); len(sm) >= 2 {
+			sym = strings.TrimSpace(sm[1])
+		} else if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			sym = strings.TrimSpace(nm[1])
+		} else if bodyText != "" && !strings.ContainsAny(bodyText, "<>") {
+			sym = bodyText
+		}
+		if sym == "" {
+			continue
+		}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+	// 4. <xref ... /> or <deps-of ... /> tags
+	for _, m := range xmlXrefRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		sym := ""
+		if sm := xmlAttrSymbols.FindStringSubmatch(attrs); len(sm) >= 2 {
+			sym = strings.TrimSpace(sm[1])
+		} else if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			sym = strings.TrimSpace(nm[1])
+		}
+		if sym == "" {
+			continue
+		}
+</search>
+<with>
+	// 4. <xref ... /> or <deps-of ... /> tags
+	for _, m := range xmlXrefRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		bodyText := ""
+		if len(m) >= 3 {
+			bodyText = strings.TrimSpace(m[2])
+		}
+
+		sym := ""
+		if sm := xmlAttrSymbols.FindStringSubmatch(attrs); len(sm) >= 2 {
+			sym = strings.TrimSpace(sm[1])
+		} else if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			sym = strings.TrimSpace(nm[1])
+		} else if bodyText != "" && !strings.ContainsAny(bodyText, "<>") {
+			sym = bodyText
+		}
+		if sym == "" {
+			continue
+		}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+	// 5. <def name="..." trace="true" /> tags
+	for _, m := range xmlDefRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		nameMatch := xmlAttrName.FindStringSubmatch(attrs)
+		if len(nameMatch) < 2 {
+			continue
+		}
+		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
+		pathVal := ""
+		if len(pathMatch) >= 2 {
+			pathVal = filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
+		}
+</search>
+<with>
+	// 5. <def name="..." trace="true" /> tags
+	for _, m := range xmlDefRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		bodyText := ""
+		if len(m) >= 3 {
+			bodyText = strings.TrimSpace(m[2])
+		}
+
+		symName := ""
+		if nm := xmlAttrName.FindStringSubmatch(attrs); len(nm) >= 2 {
+			symName = strings.TrimSpace(nm[1])
+		} else if bodyText != "" && !strings.ContainsAny(bodyText, "<>") {
+			symName = bodyText
+		}
+		if symName == "" {
+			continue
+		}
+
+		pathMatch := xmlAttrPath.FindStringSubmatch(attrs)
+		pathVal := ""
+		if len(pathMatch) >= 2 {
+			pathVal = filepath.ToSlash(strings.TrimSpace(pathMatch[1]))
+		}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+		req := FileRequest{
+			Path:     pathVal,
+			Def:      strings.TrimSpace(nameMatch[1]),
+			Trace:    traceVal,
+			Depth:    depth,
+			ForPatch: forPatch,
+		}
+</search>
+<with>
+		req := FileRequest{
+			Path:     pathVal,
+			Def:      symName,
+			Trace:    traceVal,
+			Depth:    depth,
+			ForPatch: forPatch,
+		}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			req.ForPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+
+		if req.Def == "" && req.Trace && len(req.Symbols) == 1 {
+			req.Def = req.Symbols[0]
+		}
+</search>
+<with>
+		if fpMatch := xmlAttrForPatch.FindStringSubmatch(attrs); len(fpMatch) >= 2 {
+			req.ForPatch = fpMatch[1] == "true" || fpMatch[1] == "1"
+		}
+		if sigMatch := xmlAttrSignatures.FindStringSubmatch(attrs); len(sigMatch) >= 2 {
+			req.Signatures = sigMatch[1] == "true" || sigMatch[1] == "1"
+		}
+
+		if req.Def == "" && req.Trace && len(req.Symbols) == 1 {
+			req.Def = req.Symbols[0]
+		}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+	for _, req := range expandedRequests {
+		// 1. Composite Feature Context Query
+		if req.FeatureCtx != nil {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages(req.FeatureCtx.Lang))
+			}
+			content := renderFeatureContext(astIndex, rootPath, req.FeatureCtx, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: [composite feature-context bundle]\n")
+			}
+			continue
+		}
+
+		// 2. Cross-Reference (XRef) Query
+		if req.XRef != "" {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			content := renderXRefs(astIndex, req.XRef, req.XRefAction, rootPath, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: xrefs for %q (action: %s)\n", req.XRef, req.XRefAction)
+			}
+			continue
+		}
+
+		// 3. AST Sub-Branch Case Selector
+		if req.Case != "" {
+			content, sLine, eLine, err := handleCaseRequest(rootPath, req)
+			if err != nil {
+				if !opts.Stdout {
+					fmt.Printf("⚠️ Warning: Case extraction failed: %v\n", err)
+				}
+				continue
+			}
+
+			if opts.RedactSecrets {
+				var count int
+				content, count = fileutil.RedactSecrets(content)
+				result.RedactedSecrets += count
+			}
+
+			formatted := ""
+			if req.ForPatch {
+				formatted = fmt.Sprintf("<!-- textify: AST case replacement block (ready for <replace>) -->\n<replace path=\"%s\" fn=\"%s\" case=\"%s\">\n<with>\n%s\n</with>\n</replace>\n\n", req.Path, req.Fn, req.Case, content)
+			} else {
+				formatted = renderFormattedEntry(req.Path, content, format, sLine, eLine)
+			}
+
+			n, writeErr := bufWriter.WriteString(formatted)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: %s (case: %s)\n", req.Path, req.Case)
+			}
+			continue
+		}
+
+		// 4. Struct Methods Selection
+		if req.Struct != "" && len(req.Methods) > 0 {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			content := renderStructMethods(astIndex, req, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			if !opts.Stdout {
+				fmt.Printf("Added: %s (methods: %s)\n", req.Struct, strings.Join(req.Methods, ", "))
+			}
+			continue
+		}
+
+		// 5. Deep Contextual Trace or Definition
+		if req.Def != "" {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			if astIndex == nil {
+				continue
+			}
+
+			rendered := buildASTContent(astIndex, req, opts.RedactSecrets)
+			var formatted string
+			if req.ForPatch && !req.Trace {
+				formatted = fmt.Sprintf("<!-- textify: patch anchor block (ready for <replace>) -->\n<replace path=\"%s\" symbol=\"%s\">\n<with>\n%s\n</with>\n</replace>\n\n", rendered.label, req.Def, strings.TrimRight(rendered.content, "\n"))
+			} else {
+				formatted = renderFormattedEntry(rendered.label, rendered.content, format, rendered.startLine, rendered.endLine)
+			}
+
+			n, writeErr := bufWriter.WriteString(formatted)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			result.RedactedSecrets += rendered.redacted
+
+			if !opts.Stdout {
+				desc := fmt.Sprintf("definition: %s", req.Def)
+				if req.Trace {
+					desc = fmt.Sprintf("deep contextual trace: %s", req.Def)
+				}
+				fmt.Printf("Added: %s (%s)\n", rendered.label, desc)
+			}
+			continue
+		}
+</search>
+<with>
+	for _, req := range expandedRequests {
+		// 0. Signatures Directive
+		if req.Signatures {
+			targetPath := req.Path
+			if targetPath == "" || targetPath == "." || req.Glob != "" || strings.ContainsAny(targetPath, "*?[") {
+				pattern := req.Glob
+				if pattern == "" && targetPath != "" && targetPath != "." {
+					pattern = targetPath
+				}
+				var matchedFiles []string
+				chain := config.NewGitIgnoreChain(rootPath)
+				rootRule, ok := cfg.Dirs["."]
+				if !ok {
+					rootRule = config.DirRule{Enabled: true, Extensions: []string{}}
+				}
+				_ = collectFiles(rootPath, rootPath, cfg, rootRule, chain, nil, &matchedFiles)
+				for _, mf := range matchedFiles {
+					if pattern != "" {
+						matched, _ := filepath.Match(pattern, mf)
+						if !matched {
+							matched, _ = filepath.Match(pattern, filepath.Base(mf))
+						}
+						if !matched {
+							continue
+						}
+					}
+					absP := filepath.Join(rootPath, filepath.FromSlash(mf))
+					if isBin, err := fileutil.IsBinary(absP); err != nil || isBin {
+						continue
+					}
+					rawBytes, err := os.ReadFile(absP)
+					if err != nil {
+						continue
+					}
+					content := ExtractSignatures(mf, string(rawBytes))
+					redacted := 0
+					if opts.RedactSecrets {
+						content, redacted = fileutil.RedactSecrets(content)
+					}
+					totalLines := len(strings.Split(string(rawBytes), "\n"))
+					formatted := renderFormattedEntry(mf, content, format, 1, totalLines)
+					n, writeErr := bufWriter.WriteString(formatted)
+					if writeErr != nil {
+						return nil, writeErr
+					}
+					result.FilesCount++
+					result.TotalBytes += int64(n)
+					result.RedactedSecrets += redacted
+					fmt.Fprintf(os.Stderr, "Added: %s (signatures)\n", mf)
+				}
+			} else {
+				absP := filepath.Join(rootPath, filepath.FromSlash(targetPath))
+				rawBytes, err := os.ReadFile(absP)
+				if err == nil {
+					content := ExtractSignatures(targetPath, string(rawBytes))
+					redacted := 0
+					if opts.RedactSecrets {
+						content, redacted = fileutil.RedactSecrets(content)
+					}
+					totalLines := len(strings.Split(string(rawBytes), "\n"))
+					formatted := renderFormattedEntry(targetPath, content, format, 1, totalLines)
+					n, writeErr := bufWriter.WriteString(formatted)
+					if writeErr != nil {
+						return nil, writeErr
+					}
+					result.FilesCount++
+					result.TotalBytes += int64(n)
+					result.RedactedSecrets += redacted
+					fmt.Fprintf(os.Stderr, "Added: %s (signatures)\n", targetPath)
+				}
+			}
+			continue
+		}
+
+		// 1. Composite Feature Context Query
+		if req.FeatureCtx != nil {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages(req.FeatureCtx.Lang))
+			}
+			content := renderFeatureContext(astIndex, rootPath, req.FeatureCtx, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			fmt.Fprintf(os.Stderr, "Added: [composite feature-context bundle]\n")
+			continue
+		}
+
+		// 2. Cross-Reference (XRef) Query
+		if req.XRef != "" {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			content := renderXRefs(astIndex, req.XRef, req.XRefAction, rootPath, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			fmt.Fprintf(os.Stderr, "Added: xrefs for %q (action: %s)\n", req.XRef, req.XRefAction)
+			continue
+		}
+
+		// 3. AST Sub-Branch Case Selector
+		if req.Case != "" {
+			content, sLine, eLine, err := handleCaseRequest(rootPath, req)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Warning: Case extraction failed: %v\n", err)
+				continue
+			}
+
+			if opts.RedactSecrets {
+				var count int
+				content, count = fileutil.RedactSecrets(content)
+				result.RedactedSecrets += count
+			}
+
+			formatted := ""
+			if req.ForPatch {
+				formatted = fmt.Sprintf("<!-- textify: AST case replacement block (ready for <replace>) -->\n<replace path=\"%s\" fn=\"%s\" case=\"%s\">\n<with>\n%s\n</with>\n</replace>\n\n", req.Path, req.Fn, req.Case, content)
+			} else {
+				formatted = renderFormattedEntry(req.Path, content, format, sLine, eLine)
+			}
+
+			n, writeErr := bufWriter.WriteString(formatted)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			fmt.Fprintf(os.Stderr, "Added: %s (case: %s)\n", req.Path, req.Case)
+			continue
+		}
+
+		// 4. Struct Methods Selection
+		if req.Struct != "" && len(req.Methods) > 0 {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			content := renderStructMethods(astIndex, req, opts.RedactSecrets)
+			n, writeErr := bufWriter.WriteString(content)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			fmt.Fprintf(os.Stderr, "Added: %s (methods: %s)\n", req.Struct, strings.Join(req.Methods, ", "))
+			continue
+		}
+
+		// 5. Deep Contextual Trace or Definition
+		if req.Def != "" {
+			if astIndex == nil {
+				astIndex, _ = parser.BuildIndex(rootPath, parser.ParseLanguages("all"))
+			}
+			if astIndex == nil {
+				continue
+			}
+
+			rendered := buildASTContent(astIndex, rootPath, req, opts.RedactSecrets)
+			var formatted string
+			if req.ForPatch && !req.Trace {
+				formatted = fmt.Sprintf("<!-- textify: patch anchor block (ready for <replace>) -->\n<replace path=\"%s\" symbol=\"%s\">\n<with>\n%s\n</with>\n</replace>\n\n", rendered.label, req.Def, strings.TrimRight(rendered.content, "\n"))
+			} else {
+				formatted = renderFormattedEntry(rendered.label, rendered.content, format, rendered.startLine, rendered.endLine)
+			}
+
+			n, writeErr := bufWriter.WriteString(formatted)
+			if writeErr != nil {
+				return nil, writeErr
+			}
+
+			result.FilesCount++
+			result.TotalBytes += int64(n)
+			result.RedactedSecrets += rendered.redacted
+
+			desc := fmt.Sprintf("definition: %s", req.Def)
+			if req.Trace {
+				desc = fmt.Sprintf("deep contextual trace: %s", req.Def)
+			}
+			fmt.Fprintf(os.Stderr, "Added: %s (%s)\n", rendered.label, desc)
+			continue
+		}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+		result.FilesCount++
+		result.TotalBytes += int64(n)
+		result.RedactedSecrets += redactedCount
+
+		if !opts.Stdout {
+			desc := "full"
+			if req.From != "" {
+				desc = fmt.Sprintf("from: %q to: %q", req.From, req.To)
+			} else if req.Anchor != "" {
+				desc = fmt.Sprintf("anchor: %q", req.Anchor)
+			} else if req.Query != "" {
+				desc = fmt.Sprintf("find: %q (±%d lines)", req.Query, req.Context)
+			} else if len(req.Symbols) > 0 {
+				desc = fmt.Sprintf("symbols: %s", strings.Join(req.Symbols, ", "))
+			} else if len(req.Ranges) > 0 {
+				var rStrs []string
+				for _, r := range req.Ranges {
+					if r.End > 0 {
+						rStrs = append(rStrs, fmt.Sprintf("%d-%d", r.Start, r.End))
+					} else {
+						rStrs = append(rStrs, fmt.Sprintf("%d-EOF", r.Start))
+					}
+				}
+				desc = fmt.Sprintf("lines %s", strings.Join(rStrs, ", "))
+			}
+			if req.ForPatch {
+				desc += " [patch-ready]"
+			}
+			fmt.Printf("Added: %s (%s)\n", req.Path, desc)
+		}
+</search>
+<with>
+		result.FilesCount++
+		result.TotalBytes += int64(n)
+		result.RedactedSecrets += redactedCount
+
+		desc := "full"
+		if req.From != "" {
+			desc = fmt.Sprintf("from: %q to: %q", req.From, req.To)
+		} else if req.Anchor != "" {
+			desc = fmt.Sprintf("anchor: %q", req.Anchor)
+		} else if req.Query != "" {
+			desc = fmt.Sprintf("find: %q (±%d lines)", req.Query, req.Context)
+		} else if len(req.Symbols) > 0 {
+			desc = fmt.Sprintf("symbols: %s", strings.Join(req.Symbols, ", "))
+		} else if len(req.Ranges) > 0 {
+			var rStrs []string
+			for _, r := range req.Ranges {
+				if r.End > 0 {
+					rStrs = append(rStrs, fmt.Sprintf("%d-%d", r.Start, r.End))
+				} else {
+					rStrs = append(rStrs, fmt.Sprintf("%d-EOF", r.Start))
+				}
+			}
+			desc = fmt.Sprintf("lines %s", strings.Join(rStrs, ", "))
+		}
+		if req.ForPatch {
+			desc += " [patch-ready]"
+		}
+		fmt.Fprintf(os.Stderr, "Added: %s (%s)\n", req.Path, desc)
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+func buildASTContent(index *parser.CodebaseIndex, req FileRequest, redact bool) astRenderResult {
+	var sb strings.Builder
+
+	if req.Trace {
+		depth := req.Depth
+		if depth <= 0 {
+			depth = 2
+		}
+		deep := index.TraceDeep(req.Def, depth)
+		if deep != nil {
+			sb.WriteString(deep.Render(req.ForPatch))
+		} else {
+			sb.WriteString(index.TraceFlow(req.Def, depth))
+			sb.WriteString("\n")
+		}
+	}
+
+	syms := index.FindDefinition(req.Def, req.Path)
+	firstFile := ""
+	startLine := 0
+	endLine := 0
+
+	if len(syms) == 0 && !req.Trace {
+		sb.WriteString(fmt.Sprintf("/* Symbol %q not found in AST index */\n", req.Def))
+	} else if !req.Trace {
+		firstFile = syms[0].File
+		for _, sym := range syms {
+			sb.WriteString(fmt.Sprintf("/* Definition: %s %s [%s:%d-%d] */\n", sym.Kind, sym.FullName(), sym.File, sym.StartLine, sym.EndLine))
+			if req.ForPatch {
+				sb.WriteString(sym.Body)
+				sb.WriteString("\n\n")
+			} else {
+				for offset, line := range strings.Split(sym.Body, "\n") {
+					sb.WriteString(fmt.Sprintf("%5d | %s\n", sym.StartLine+offset, line))
+				}
+				sb.WriteString("\n")
+			}
+
+			if startLine == 0 || sym.StartLine < startLine {
+				startLine = sym.StartLine
+			}
+			if sym.EndLine > endLine {
+				endLine = sym.EndLine
+			}
+		}
+	}
+</search>
+<with>
+func buildASTContent(index *parser.CodebaseIndex, rootPath string, req FileRequest, redact bool) astRenderResult {
+	var sb strings.Builder
+
+	if req.Trace {
+		depth := req.Depth
+		if depth <= 0 {
+			depth = 2
+		}
+		deep := index.TraceDeep(req.Def, depth)
+		if deep != nil {
+			sb.WriteString(deep.Render(req.ForPatch))
+		} else {
+			sb.WriteString(index.TraceFlow(req.Def, depth))
+			sb.WriteString("\n")
+		}
+	}
+
+	syms := index.FindDefinition(req.Def, req.Path)
+	firstFile := ""
+	startLine := 0
+	endLine := 0
+
+	if len(syms) == 0 && !req.Trace {
+		fallbackFound := findDefinitionFallback(rootPath, req.Def)
+		if fallbackFound != "" {
+			sb.WriteString(fallbackFound)
+		} else {
+			sb.WriteString(fmt.Sprintf("/* Symbol %q not found in AST index */\n", req.Def))
+		}
+	} else if !req.Trace {
+		firstFile = syms[0].File
+		for _, sym := range syms {
+			sb.WriteString(fmt.Sprintf("/* Definition: %s %s [%s:%d-%d] */\n", sym.Kind, sym.FullName(), sym.File, sym.StartLine, sym.EndLine))
+			if req.ForPatch {
+				sb.WriteString(sym.Body)
+				sb.WriteString("\n\n")
+			} else {
+				for offset, line := range strings.Split(sym.Body, "\n") {
+					sb.WriteString(fmt.Sprintf("%5d | %s\n", sym.StartLine+offset, line))
+				}
+				sb.WriteString("\n")
+			}
+
+			if startLine == 0 || sym.StartLine < startLine {
+				startLine = sym.StartLine
+			}
+			if sym.EndLine > endLine {
+				endLine = sym.EndLine
+			}
+		}
+	}
+</with>
+</replace>
+
+<replace path="internal/scanner/request.go">
+<search>
+func findMatchingFiles(rootPath, pattern string) []string {
+</search>
+<with>
+func findDefinitionFallback(rootPath, symbolName string) string {
+	clean := strings.TrimSpace(symbolName)
+	clean = strings.Trim(clean, "()*&")
+	if clean == "" {
+		return ""
+	}
+
+	declRegex := regexp.MustCompile(`(?m)^\s*(?:func|fn|pub fn|def|class|type|interface|struct)\s+(?:(?:\([^)]*\)\s*)?` + regexp.QuoteMeta(clean) + `\b)`)
+
+	var result strings.Builder
+	_ = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		switch ext {
+		case ".go", ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".java", ".c", ".cpp", ".h":
+		default:
+			return nil
+		}
+
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+
+		rel, _ := filepath.Rel(rootPath, path)
+		rel = filepath.ToSlash(rel)
+
+		lines := strings.Split(string(data), "\n")
+		for idx, l := range lines {
+			if declRegex.MatchString(l) {
+				st := idx + 1
+				en := st + 30
+				if en > len(lines) {
+					en = len(lines)
+				}
+				result.WriteString(fmt.Sprintf("/* Definition: %s [%s:%d-%d] */\n", clean, rel, st, en))
+				for j := st - 1; j < en; j++ {
+					result.WriteString(fmt.Sprintf("%5d | %s\n", j+1, lines[j]))
+				}
+				result.WriteString("\n")
+				return filepath.SkipAll
+			}
+		}
+		return nil
+	})
+
+	return result.String()
+}
+
+func findMatchingFiles(rootPath, pattern string) []string {
+</with>
+</replace>
+
+<replace path="cmd/textify/main.go">
+<search>
+func runLoad(args []string) {
+	fs := flag.NewFlagSet("load", flag.ExitOnError)
+	configPath := fs.String("config", "textify.yaml", "Configuration file path")
+	formatFlag := fs.String("format", "tags", "Output format (tags, raw, markdown)")
+	formatShort := fs.String("f", "tags", "Output format (shorthand)")
+	stdoutFlag := fs.Bool("stdout", false, "Write extracted content to stdout")
+	stdoutShort := fs.Bool("s", false, "Write extracted content to stdout (shorthand)")
+	clipInFlag := fs.Bool("clip-in", false, "Read request directly from system clipboard")
+	clipInShort := fs.Bool("ci", false, "Read request directly from system clipboard (shorthand)")
+	clipOutFlag := fs.Bool("clip", false, "Copy output directly to system clipboard")
+	clipOutShort := fs.Bool("c", false, "Copy output directly to system clipboard (shorthand)")
+	redactFlag := fs.Bool("redact", false, "Redact sensitive tokens and secrets")
+	redactShort := fs.Bool("r", false, "Redact sensitive tokens and secrets (shorthand)")
+
+	valueFlags := map[string]bool{"--config": true, "-config": true, "--format": true, "-format": true, "-f": true}
+	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
+
+	var rawInput string
+
+	if *clipInFlag || *clipInShort {
+		clipContent, err := fileutil.ReadFromClipboard()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading from clipboard: %v\n", err)
+			os.Exit(1)
+		}
+		rawInput = clipContent
+	} else if fs.NArg() > 0 {
+		filePath := fs.Arg(0)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading file %q: %v\n", filePath, err)
+			os.Exit(1)
+		}
+		rawInput = string(data)
+	} else {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+				os.Exit(1)
+			}
+			rawInput = string(data)
+		} else {
+			fmt.Println("Usage: textify load [file] [-ci] [-c] [-s]")
+			os.Exit(1)
+		}
+	}
+
+	requests := scanner.ParseRequest(rawInput)
+	if len(requests) == 0 {
+		fmt.Fprintln(os.Stderr, "No valid request directives (<file>, <slice>, <grep>, <def>, etc.) found.")
+		os.Exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg := config.DefaultConfig()
+	if _, err := os.Stat(*configPath); err == nil {
+		if loaded, err := config.Load(*configPath); err == nil {
+			cfg = *loaded
+		}
+	}
+
+	var buf bytes.Buffer
+	toStdout := *stdoutFlag || *stdoutShort
+	toClip := *clipOutFlag || *clipOutShort
+	fmtChoice := firstNonEmpty(*formatFlag, *formatShort)
+	if fmtChoice == "" {
+		fmtChoice = "tags"
+	}
+
+	scanRes, err := scanner.LoadRequests(cwd, &cfg, requests, &buf, scanner.ScanOptions{
+		Format:        fmtChoice,
+		RedactSecrets: *redactFlag || *redactShort,
+		Stdout:        toStdout || toClip,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading requests: %v\n", err)
+		os.Exit(1)
+	}
+
+	output := buf.String()
+
+	if toStdout || (!toClip && scanRes.FilesCount == 0) {
+		fmt.Print(output)
+	}
+
+	if toClip {
+		if clipErr := fileutil.CopyToClipboard(output); clipErr == nil {
+			fmt.Fprintf(os.Stderr, "✔ Successfully copied requested content (%d sections, ~%d tokens) to clipboard!\n", scanRes.FilesCount, scanRes.ApproxTokens)
+		} else {
+			fmt.Fprintf(os.Stderr, "Notice: Could not copy to clipboard (%v)\n", clipErr)
+			if !toStdout {
+				fmt.Print(output)
+			}
+		}
+	} else if !toStdout {
+		fmt.Printf("\nDone: %d items loaded (~%d tokens).\n", scanRes.FilesCount, scanRes.ApproxTokens)
+	}
+}
+</search>
+<with>
+func runLoad(args []string) {
+	fs := flag.NewFlagSet("load", flag.ExitOnError)
+	configPath := fs.String("config", "textify.yaml", "Configuration file path")
+	formatFlag := fs.String("format", "tags", "Output format (tags, raw, markdown)")
+	formatShort := fs.String("f", "tags", "Output format (shorthand)")
+	stdoutFlag := fs.Bool("stdout", false, "Write extracted content to stdout")
+	stdoutShort := fs.Bool("s", false, "Write extracted content to stdout (shorthand)")
+	clipInFlag := fs.Bool("clip-in", false, "Read request directly from system clipboard")
+	clipInShort := fs.Bool("ci", false, "Read request directly from system clipboard (shorthand)")
+	clipOutFlag := fs.Bool("clip", false, "Copy output directly to system clipboard")
+	clipOutShort := fs.Bool("c", false, "Copy output directly to system clipboard (shorthand)")
+	redactFlag := fs.Bool("redact", false, "Redact sensitive tokens and secrets")
+	redactShort := fs.Bool("r", false, "Redact sensitive tokens and secrets (shorthand)")
+	outputFlag := fs.String("output", "", "Output file path (default from config or codebase.txt)")
+	outputShort := fs.String("o", "", "Output file path (shorthand)")
+
+	valueFlags := map[string]bool{
+		"--config": true, "-config": true,
+		"--format": true, "-format": true, "-f": true,
+		"--output": true, "-output": true, "-o": true,
+	}
+	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
+
+	var rawInput string
+
+	if *clipInFlag || *clipInShort {
+		clipContent, err := fileutil.ReadFromClipboard()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading from clipboard: %v\n", err)
+			os.Exit(1)
+		}
+		rawInput = clipContent
+	} else if fs.NArg() > 0 {
+		filePath := fs.Arg(0)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading file %q: %v\n", filePath, err)
+			os.Exit(1)
+		}
+		rawInput = string(data)
+	} else {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+				os.Exit(1)
+			}
+			rawInput = string(data)
+		} else {
+			fmt.Println("Usage: textify load [file] [-ci] [-c] [-s] [-o codebase.txt]")
+			os.Exit(1)
+		}
+	}
+
+	requests := scanner.ParseRequest(rawInput)
+	if len(requests) == 0 {
+		fmt.Fprintln(os.Stderr, "No valid request directives (<file>, <slice>, <grep>, <def>, etc.) found.")
+		os.Exit(1)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg := config.DefaultConfig()
+	if _, err := os.Stat(*configPath); err == nil {
+		if loaded, err := config.Load(*configPath); err == nil {
+			cfg = *loaded
+		}
+	}
+
+	toStdout := *stdoutFlag || *stdoutShort
+	toClip := *clipOutFlag || *clipOutShort
+	fmtChoice := firstNonEmpty(*formatFlag, *formatShort)
+	if fmtChoice == "" {
+		fmtChoice = "tags"
+	}
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	var fileOut *os.File
+	outFile := firstNonEmpty(*outputFlag, *outputShort, cfg.OutputFile, "codebase.txt")
+
+	if !toStdout && !toClip {
+		f, createErr := os.Create(outFile)
+		if createErr != nil {
+			fmt.Fprintf(os.Stderr, "Error creating output file %q: %v\n", outFile, createErr)
+			os.Exit(1)
+		}
+		defer f.Close()
+		fileOut = f
+		writer = io.MultiWriter(&buf, fileOut)
+	}
+
+	scanRes, err := scanner.LoadRequests(cwd, &cfg, requests, writer, scanner.ScanOptions{
+		Format:        fmtChoice,
+		RedactSecrets: *redactFlag || *redactShort,
+		Stdout:        toStdout,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading requests: %v\n", err)
+		os.Exit(1)
+	}
+
+	output := buf.String()
+
+	if toStdout {
+		fmt.Print(output)
+	}
+
+	if toClip {
+		if clipErr := fileutil.CopyToClipboard(output); clipErr == nil {
+			fmt.Fprintf(os.Stderr, "✔ Successfully copied requested content (%d sections, ~%d tokens) to clipboard!\n", scanRes.FilesCount, scanRes.ApproxTokens)
+		} else {
+			fmt.Fprintf(os.Stderr, "Notice: Could not copy to clipboard (%v)\n", clipErr)
+			if !toStdout {
+				fmt.Print(output)
+			}
+		}
+	} else if !toStdout {
+		fmt.Fprintf(os.Stderr, "\n✔ Loaded %d items (%s, ~%d tokens) into %s\n",
+			scanRes.FilesCount,
+			formatBytes(scanRes.TotalBytes),
+			scanRes.ApproxTokens,
+			outFile,
+		)
+		if scanRes.RedactedSecrets > 0 {
+			fmt.Fprintf(os.Stderr, "🛡️ Redacted %d sensitive secrets/tokens.\n", scanRes.RedactedSecrets)
+		}
+	}
+}
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher.go">
+<search>
+type fileOp struct {
+	kind     ChangeType
+	path     string
+	content  string
+	replaces []replaceDirective
+}
+
+type replaceDirective struct {
+	symbol  string
+	fn      string
+	caseVal string
+	within  string
+	search  string
+	with    string
+	after   string
+	before  string
+	from    string
+	to      string
+}
+
+var (
+	tagFileRegex    = regexp.MustCompile(`(?is)<file\s+path=["']([^"']+)["']\s*>(.*?)</file>`)
+	tagDeleteRegex  = regexp.MustCompile(`(?i)<delete\s+path=["']([^"']+)["']\s*/>`)
+	tagReplaceRegex = regexp.MustCompile(`(?is)<replace\s+([^>]+)>(.*?)</replace>`)
+
+	attrPath   = regexp.MustCompile(`(?i)\bpath=["']([^"']+)["']`)
+	attrSymbol = regexp.MustCompile(`(?i)\bsymbol=["']([^"']+)["']`)
+	attrFn     = regexp.MustCompile(`(?i)\b(?:fn|func)=["']([^"']+)["']`)
+	attrCase   = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
+	attrWithin = regexp.MustCompile(`(?i)\bwithin=["']([^"']+)["']`)
+	attrAfter  = regexp.MustCompile(`(?i)\bafter=["']([^"']+)["']`)
+	attrBefore = regexp.MustCompile(`(?i)\bbefore=["']([^"']+)["']`)
+	attrFrom   = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	attrTo     = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
+
+	searchBlockRegex = regexp.MustCompile(`(?is)<search>\s*(.*?)\s*</search>`)
+	withBlockRegex   = regexp.MustCompile(`(?is)<with>\s*(.*?)\s*</with>`)
+)
+</search>
+<with>
+type fileOp struct {
+	kind      ChangeType
+	path      string
+	content   string
+	lineRange *parser.LineRange
+	replaces  []replaceDirective
+}
+
+type replaceDirective struct {
+	symbol  string
+	fn      string
+	caseVal string
+	within  string
+	search  string
+	with    string
+	after   string
+	before  string
+	from    string
+	to      string
+}
+
+var (
+	tagAnyOpRegex = regexp.MustCompile(`(?is)<(file|replace|delete)\b([^>]*?)(?:/>|>(.*?)</\1>)`)
+
+	attrPath   = regexp.MustCompile(`(?i)\b(?:path|file)=["']([^"']+)["']`)
+	attrLines  = regexp.MustCompile(`(?i)\blines=["']([^"']+)["']`)
+	attrSymbol = regexp.MustCompile(`(?i)\bsymbol=["']([^"']+)["']`)
+	attrFn     = regexp.MustCompile(`(?i)\b(?:fn|func|function|method)=["']([^"']+)["']`)
+	attrCase   = regexp.MustCompile(`(?i)\bcase=["']([^"']+)["']`)
+	attrWithin = regexp.MustCompile(`(?i)\bwithin=["']([^"']+)["']`)
+	attrAfter  = regexp.MustCompile(`(?i)\bafter=["']([^"']+)["']`)
+	attrBefore = regexp.MustCompile(`(?i)\bbefore=["']([^"']+)["']`)
+	attrFrom   = regexp.MustCompile(`(?i)\bfrom=["']([^"']+)["']`)
+	attrTo     = regexp.MustCompile(`(?i)\bto=["']([^"']+)["']`)
+
+	searchBlockRegex = regexp.MustCompile(`(?is)<search(?:\s+[^>]*)?>(.*?)</search>`)
+	withBlockRegex   = regexp.MustCompile(`(?is)<with(?:\s+[^>]*)?>(.*?)</with>`)
+)
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher.go">
+<search>
+	// PASS 1: Virtual File System (VFS) in-memory evaluation
+	vfs := make(map[string]string)
+	vfsDeleted := make(map[string]bool)
+
+	// Load existing file contents into VFS
+	for _, op := range ops {
+		cleanP := filepath.ToSlash(filepath.Clean(op.path))
+		if _, ok := vfs[cleanP]; ok {
+			continue
+		}
+		absP := filepath.Join(root, filepath.FromSlash(cleanP))
+		data, readErr := os.ReadFile(absP)
+		if readErr == nil {
+			vfs[cleanP] = string(data)
+		}
+	}
+
+	var changes []ChangeRecord
+
+	for _, op := range ops {
+		cleanP := filepath.ToSlash(filepath.Clean(op.path))
+		switch op.kind {
+		case ChangeCreate:
+			vfs[cleanP] = op.content
+			delete(vfsDeleted, cleanP)
+			changes = append(changes, ChangeRecord{
+				Type: ChangeCreate,
+				Path: cleanP,
+			})
+
+		case ChangeDelete:
+			vfsDeleted[cleanP] = true
+			delete(vfs, cleanP)
+			changes = append(changes, ChangeRecord{
+				Type: ChangeDelete,
+				Path: cleanP,
+			})
+
+		case ChangeUpdate:
+			curr, exists := vfs[cleanP]
+			if !exists || vfsDeleted[cleanP] {
+				return nil, fmt.Errorf("cannot patch %q: file does not exist", cleanP)
+			}
+
+			updated := curr
+			for _, rep := range op.replaces {
+				newContent, repErr := applyReplace(cleanP, updated, rep, opts.Fix)
+				if repErr != nil {
+					return nil, fmt.Errorf("failed to apply replace on %q: %w", cleanP, repErr)
+				}
+				updated = newContent
+			}
+
+			// Format Go files if modified
+			if strings.HasSuffix(cleanP, ".go") {
+				if formatted, err := format.Source([]byte(updated)); err == nil {
+					updated = string(formatted)
+				}
+			}
+
+			vfs[cleanP] = updated
+			changes = append(changes, ChangeRecord{
+				Type: ChangeUpdate,
+				Path: cleanP,
+			})
+		}
+	}
+
+	// PASS 2: Atomic commit to disk (unless DryRun)
+	if !opts.DryRun {
+		for _, op := range ops {
+			cleanP := filepath.ToSlash(filepath.Clean(op.path))
+			absP := filepath.Join(root, filepath.FromSlash(cleanP))
+
+			if vfsDeleted[cleanP] {
+				_ = os.Remove(absP)
+				continue
+			}
+
+			if content, ok := vfs[cleanP]; ok {
+				if err := os.MkdirAll(filepath.Dir(absP), 0755); err != nil {
+					return nil, fmt.Errorf("create dir for %q: %w", cleanP, err)
+				}
+				if err := os.WriteFile(absP, []byte(content), 0644); err != nil {
+					return nil, fmt.Errorf("write %q: %w", cleanP, err)
+				}
+			}
+		}
+	}
+</search>
+<with>
+	// PASS 1: Virtual File System (VFS) in-memory evaluation
+	vfs := make(map[string]string)
+	vfsDeleted := make(map[string]bool)
+
+	loadFileToVFS := func(cleanP string) {
+		if _, ok := vfs[cleanP]; !ok {
+			absP := filepath.Join(root, filepath.FromSlash(cleanP))
+			data, readErr := os.ReadFile(absP)
+			if readErr == nil {
+				vfs[cleanP] = string(data)
+			}
+		}
+	}
+
+	var changes []ChangeRecord
+	seenChange := make(map[string]ChangeType)
+
+	for _, op := range ops {
+		cleanP := filepath.ToSlash(filepath.Clean(op.path))
+		loadFileToVFS(cleanP)
+
+		switch op.kind {
+		case ChangeCreate:
+			if op.lineRange != nil {
+				curr, exists := vfs[cleanP]
+				if !exists || vfsDeleted[cleanP] {
+					vfs[cleanP] = op.content
+				} else {
+					lines := strings.Split(curr, "\n")
+					st := op.lineRange.Start - 1
+					en := op.lineRange.End
+					if st < 0 {
+						st = 0
+					}
+					if en > len(lines) {
+						en = len(lines)
+					}
+					var newLines []string
+					if st > 0 {
+						newLines = append(newLines, lines[:st]...)
+					}
+					newLines = append(newLines, op.content)
+					if en < len(lines) {
+						newLines = append(newLines, lines[en:]...)
+					}
+					vfs[cleanP] = strings.Join(newLines, "\n")
+				}
+				seenChange[cleanP] = ChangeUpdate
+			} else {
+				vfs[cleanP] = op.content
+				delete(vfsDeleted, cleanP)
+				seenChange[cleanP] = ChangeCreate
+			}
+
+		case ChangeDelete:
+			vfsDeleted[cleanP] = true
+			delete(vfs, cleanP)
+			seenChange[cleanP] = ChangeDelete
+
+		case ChangeUpdate:
+			curr, exists := vfs[cleanP]
+			if !exists || vfsDeleted[cleanP] {
+				return nil, fmt.Errorf("cannot patch %q: file does not exist", cleanP)
+			}
+
+			updated := curr
+			for _, rep := range op.replaces {
+				newContent, repErr := applyReplace(cleanP, updated, rep, opts.Fix)
+				if repErr != nil {
+					return nil, fmt.Errorf("failed to apply replace on %q: %w", cleanP, repErr)
+				}
+				updated = newContent
+			}
+
+			// Format Go files if modified
+			if strings.HasSuffix(cleanP, ".go") {
+				if formatted, err := format.Source([]byte(updated)); err == nil {
+					updated = string(formatted)
+				}
+			}
+
+			vfs[cleanP] = updated
+			if seenChange[cleanP] != ChangeCreate {
+				seenChange[cleanP] = ChangeUpdate
+			}
+		}
+	}
+
+	for _, op := range ops {
+		cleanP := filepath.ToSlash(filepath.Clean(op.path))
+		if chType, ok := seenChange[cleanP]; ok {
+			changes = append(changes, ChangeRecord{
+				Type: chType,
+				Path: cleanP,
+			})
+			delete(seenChange, cleanP)
+		}
+	}
+
+	// PASS 2: Atomic commit to disk (unless DryRun)
+	if !opts.DryRun {
+		for p, isDel := range vfsDeleted {
+			if isDel {
+				absP := filepath.Join(root, filepath.FromSlash(p))
+				_ = os.Remove(absP)
+			}
+		}
+		for p, content := range vfs {
+			if vfsDeleted[p] {
+				continue
+			}
+			absP := filepath.Join(root, filepath.FromSlash(p))
+			if err := os.MkdirAll(filepath.Dir(absP), 0755); err != nil {
+				return nil, fmt.Errorf("create dir for %q: %w", p, err)
+			}
+			if err := os.WriteFile(absP, []byte(content), 0644); err != nil {
+				return nil, fmt.Errorf("write %q: %w", p, err)
+			}
+		}
+	}
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher.go">
+<search>
+func parsePatchDirectives(input string) ([]fileOp, error) {
+	var ops []fileOp
+	fileReplaces := make(map[string][]replaceDirective)
+
+	// 1. <file path="...">
+	for _, m := range tagFileRegex.FindAllStringSubmatch(input, -1) {
+		path := filepath.ToSlash(strings.TrimSpace(m[1]))
+		content := m[2]
+		if strings.HasPrefix(content, "\r\n") {
+			content = content[2:]
+		} else if strings.HasPrefix(content, "\n") {
+			content = content[1:]
+		}
+		ops = append(ops, fileOp{
+			kind:    ChangeCreate,
+			path:    path,
+			content: content,
+		})
+	}
+
+	// 2. <delete path="..." />
+	for _, m := range tagDeleteRegex.FindAllStringSubmatch(input, -1) {
+		path := filepath.ToSlash(strings.TrimSpace(m[1]))
+		ops = append(ops, fileOp{
+			kind: ChangeDelete,
+			path: path,
+		})
+	}
+
+	// 3. <replace ...>
+	for _, m := range tagReplaceRegex.FindAllStringSubmatch(input, -1) {
+		attrs := m[1]
+		body := m[2]
+
+		pMatch := attrPath.FindStringSubmatch(attrs)
+		if len(pMatch) < 2 {
+			continue
+		}
+		path := filepath.ToSlash(strings.TrimSpace(pMatch[1]))
+
+		rep := replaceDirective{}
+		if sm := attrSymbol.FindStringSubmatch(attrs); len(sm) >= 2 {
+			rep.symbol = strings.TrimSpace(sm[1])
+		}
+		if fm := attrFn.FindStringSubmatch(attrs); len(fm) >= 2 {
+			rep.fn = strings.TrimSpace(fm[1])
+		}
+		if cm := attrCase.FindStringSubmatch(attrs); len(cm) >= 2 {
+			rep.caseVal = strings.TrimSpace(cm[1])
+		}
+		if wm := attrWithin.FindStringSubmatch(attrs); len(wm) >= 2 {
+			rep.within = strings.TrimSpace(wm[1])
+		}
+		if am := attrAfter.FindStringSubmatch(attrs); len(am) >= 2 {
+			rep.after = strings.TrimSpace(am[1])
+		}
+		if bm := attrBefore.FindStringSubmatch(attrs); len(bm) >= 2 {
+			rep.before = strings.TrimSpace(bm[1])
+		}
+		if fromM := attrFrom.FindStringSubmatch(attrs); len(fromM) >= 2 {
+			rep.from = strings.TrimSpace(fromM[1])
+		}
+		if toM := attrTo.FindStringSubmatch(attrs); len(toM) >= 2 {
+			rep.to = strings.TrimSpace(toM[1])
+		}
+
+		if sMatch := searchBlockRegex.FindStringSubmatch(body); len(sMatch) >= 2 {
+			rep.search = sMatch[1]
+		}
+		if wMatch := withBlockRegex.FindStringSubmatch(body); len(wMatch) >= 2 {
+			rep.with = wMatch[1]
+		} else {
+			// Content of replace without with tags
+			rep.with = strings.TrimSpace(body)
+		}
+
+		fileReplaces[path] = append(fileReplaces[path], rep)
+	}
+
+	for p, reps := range fileReplaces {
+		ops = append(ops, fileOp{
+			kind:     ChangeUpdate,
+			path:     p,
+			replaces: reps,
+		})
+	}
+
+	return ops, nil
+}
+</search>
+<with>
+func parsePatchDirectives(input string) ([]fileOp, error) {
+	var ops []fileOp
+
+	matches := tagAnyOpRegex.FindAllStringSubmatchIndex(input, -1)
+	for _, loc := range matches {
+		tagName := strings.ToLower(input[loc[2]:loc[3]])
+		attrs := input[loc[4]:loc[5]]
+		body := ""
+		if loc[6] >= 0 && loc[7] >= 0 {
+			body = input[loc[6]:loc[7]]
+		}
+
+		pMatch := attrPath.FindStringSubmatch(attrs)
+		if len(pMatch) < 2 {
+			continue
+		}
+		path := filepath.ToSlash(strings.TrimSpace(pMatch[1]))
+
+		switch tagName {
+		case "file":
+			var lr *parser.LineRange
+			if lMatch := attrLines.FindStringSubmatch(attrs); len(lMatch) >= 2 {
+				ranges := parser.ParseLineRanges(lMatch[1])
+				if len(ranges) > 0 {
+					lr = &ranges[0]
+				}
+			}
+			content := cleanBlockContent(body)
+			ops = append(ops, fileOp{
+				kind:      ChangeCreate,
+				path:      path,
+				content:   content,
+				lineRange: lr,
+			})
+
+		case "delete":
+			ops = append(ops, fileOp{
+				kind: ChangeDelete,
+				path: path,
+			})
+
+		case "replace":
+			rep := replaceDirective{}
+			if sm := attrSymbol.FindStringSubmatch(attrs); len(sm) >= 2 {
+				rep.symbol = strings.TrimSpace(sm[1])
+			}
+			if fm := attrFn.FindStringSubmatch(attrs); len(fm) >= 2 {
+				rep.fn = strings.TrimSpace(fm[1])
+			}
+			if cm := attrCase.FindStringSubmatch(attrs); len(cm) >= 2 {
+				rep.caseVal = strings.TrimSpace(cm[1])
+			}
+			if wm := attrWithin.FindStringSubmatch(attrs); len(wm) >= 2 {
+				rep.within = strings.TrimSpace(wm[1])
+			}
+			if am := attrAfter.FindStringSubmatch(attrs); len(am) >= 2 {
+				rep.after = cleanBlockContent(am[1])
+			}
+			if bm := attrBefore.FindStringSubmatch(attrs); len(bm) >= 2 {
+				rep.before = cleanBlockContent(bm[1])
+			}
+			if fromM := attrFrom.FindStringSubmatch(attrs); len(fromM) >= 2 {
+				rep.from = cleanBlockContent(fromM[1])
+			}
+			if toM := attrTo.FindStringSubmatch(attrs); len(toM) >= 2 {
+				rep.to = cleanBlockContent(toM[1])
+			}
+
+			if sMatch := searchBlockRegex.FindStringSubmatch(body); len(sMatch) >= 2 {
+				rep.search = cleanBlockContent(sMatch[1])
+			}
+			if wMatch := withBlockRegex.FindStringSubmatch(body); len(wMatch) >= 2 {
+				rep.with = cleanBlockContent(wMatch[1])
+			} else if rep.search != "" {
+				sEnd := searchBlockRegex.FindStringIndex(body)
+				if sEnd != nil && sEnd[1] < len(body) {
+					rep.with = cleanBlockContent(body[sEnd[1]:])
+				}
+			} else {
+				rep.with = cleanBlockContent(body)
+			}
+
+			ops = append(ops, fileOp{
+				kind:     ChangeUpdate,
+				path:     path,
+				replaces: []replaceDirective{rep},
+			})
+		}
+	}
+
+	return ops, nil
+}
+
+func cleanBlockContent(s string) string {
+	s = stripCodeFences(s)
+	s = stripLineNumberPrefixes(s)
+
+	if strings.HasPrefix(s, "\r\n") {
+		s = s[2:]
+	} else if strings.HasPrefix(s, "\n") {
+		s = s[1:]
+	}
+
+	if strings.HasSuffix(s, "\r\n") {
+		s = s[:len(s)-2]
+	} else if strings.HasSuffix(s, "\n") {
+		s = s[:len(s)-1]
+	}
+
+	idx := strings.LastIndex(s, "\n")
+	if idx != -1 && strings.TrimSpace(s[idx+1:]) == "" {
+		s = s[:idx]
+	}
+
+	return s
+}
+
+func stripCodeFences(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if strings.HasPrefix(trimmed, "```") {
+		lines := strings.Split(s, "\n")
+		if len(lines) >= 2 && strings.HasPrefix(strings.TrimSpace(lines[0]), "```") {
+			lastIdx := len(lines) - 1
+			for lastIdx > 0 && strings.TrimSpace(lines[lastIdx]) == "" {
+				lastIdx--
+			}
+			if lastIdx > 0 && strings.HasPrefix(strings.TrimSpace(lines[lastIdx]), "```") {
+				return strings.Join(lines[1:lastIdx], "\n")
+			}
+		}
+	}
+	return s
+}
+
+func stripLineNumberPrefixes(s string) string {
+	lines := strings.Split(s, "\n")
+	hasPrefixes := true
+	nonEmptyCount := 0
+	prefixRe := regexp.MustCompile(`^\s*\d+\s*\|\s*`)
+	for _, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		nonEmptyCount++
+		if !prefixRe.MatchString(l) {
+			hasPrefixes = false
+			break
+		}
+	}
+	if hasPrefixes && nonEmptyCount > 0 {
+		for i, l := range lines {
+			lines[i] = prefixRe.ReplaceAllString(l, "")
+		}
+		return strings.Join(lines, "\n")
+	}
+	return s
+}
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher.go">
+<search>
+	// 2. AST Symbol Replacement
+	if rep.symbol != "" {
+		syms, err := parser.ParseGoFile(filePath, []byte(content))
+		if err == nil {
+			for _, s := range syms {
+				if s.Name == rep.symbol || s.FullName() == rep.symbol {
+					lines := strings.Split(content, "\n")
+					var out []string
+					out = append(out, lines[:s.StartLine-1]...)
+					out = append(out, rep.with)
+					if s.EndLine < len(lines) {
+						out = append(out, lines[s.EndLine:]...)
+					}
+					return strings.Join(out, "\n"), nil
+				}
+			}
+		}
+	}
+</search>
+<with>
+	// 2. AST Symbol Replacement
+	if rep.symbol != "" {
+		var syms []parser.Symbol
+		ext := strings.ToLower(filepath.Ext(filePath))
+		if ext == ".go" {
+			syms, _ = parser.ParseGoFile(filePath, []byte(content))
+		} else if ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" {
+			syms, _ = parser.ParseTypeScriptFile(filePath, []byte(content))
+		}
+		for _, s := range syms {
+			if s.Name == rep.symbol || s.FullName() == rep.symbol {
+				lines := strings.Split(content, "\n")
+				var out []string
+				out = append(out, lines[:s.StartLine-1]...)
+				out = append(out, rep.with)
+				if s.EndLine < len(lines) {
+					out = append(out, lines[s.EndLine:]...)
+				}
+				return strings.Join(out, "\n"), nil
+			}
+		}
+	}
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher.go">
+<search>
+	// 3. Anchor Insertions (after / before)
+	if rep.after != "" {
+		idx := strings.Index(content, rep.after)
+		if idx == -1 {
+			return "", fmt.Errorf("anchor after=%q not found", rep.after)
+		}
+		insertPos := idx + len(rep.after)
+		return content[:insertPos] + "\n" + rep.with + content[insertPos:], nil
+	}
+	if rep.before != "" {
+		idx := strings.Index(content, rep.before)
+		if idx == -1 {
+			return "", fmt.Errorf("anchor before=%q not found", rep.before)
+		}
+		return content[:idx] + rep.with + "\n" + content[idx:], nil
+	}
+</search>
+<with>
+	// 3. Anchor Insertions (after / before)
+	if rep.after != "" {
+		idx := strings.Index(content, rep.after)
+		if idx == -1 {
+			idx = findLineWithAnchor(content, rep.after)
+		}
+		if idx == -1 {
+			return "", fmt.Errorf("anchor after=%q not found", rep.after)
+		}
+		lineEnd := strings.Index(content[idx:], "\n")
+		var insertPos int
+		if lineEnd == -1 {
+			insertPos = len(content)
+		} else {
+			insertPos = idx + lineEnd + 1
+		}
+		return content[:insertPos] + rep.with + "\n" + content[insertPos:], nil
+	}
+	if rep.before != "" {
+		idx := strings.Index(content, rep.before)
+		if idx == -1 {
+			idx = findLineWithAnchor(content, rep.before)
+		}
+		if idx == -1 {
+			return "", fmt.Errorf("anchor before=%q not found", rep.before)
+		}
+		lineStart := strings.LastIndex(content[:idx], "\n")
+		var insertPos int
+		if lineStart == -1 {
+			insertPos = 0
+		} else {
+			insertPos = lineStart + 1
+		}
+		return content[:insertPos] + rep.with + "\n" + content[insertPos:], nil
+	}
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher.go">
+<search>
+func replaceSearchText(content, search, with string, fix bool) (string, error) {
+	searchTrim := strings.TrimSpace(search)
+	if searchTrim == "" {
+		return content, nil
+	}
+
+	// Exact match
+	if strings.Contains(content, search) {
+		return strings.Replace(content, search, with, 1), nil
+	}
+
+	// Wildcard / ellipsis (...) matching
+	if strings.Contains(search, "...") {
+		parts := strings.Split(search, "...")
+		var reStr bytes.Buffer
+		for i, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			if i > 0 {
+				reStr.WriteString(`(?s:.*?)`)
+			}
+			reStr.WriteString(regexp.QuoteMeta(trimmed))
+		}
+		re, err := regexp.Compile(reStr.String())
+		if err == nil && re.MatchString(content) {
+			return re.ReplaceAllString(content, with), nil
+		}
+	}
+</search>
+<with>
+func findLineWithAnchor(content, anchor string) int {
+	clean := strings.TrimSpace(anchor)
+	if clean == "" {
+		return -1
+	}
+	offset := 0
+	lines := strings.Split(content, "\n")
+	for _, l := range lines {
+		if strings.Contains(strings.TrimSpace(l), clean) {
+			return offset
+		}
+		offset += len(l) + 1
+	}
+	return -1
+}
+
+func replaceSearchText(content, search, with string, fix bool) (string, error) {
+	searchTrim := strings.TrimSpace(search)
+	if searchTrim == "" {
+		return content, nil
+	}
+
+	hasCRLF := strings.Contains(content, "\r\n")
+	if hasCRLF {
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+		search = strings.ReplaceAll(search, "\r\n", "\n")
+		with = strings.ReplaceAll(with, "\r\n", "\n")
+	}
+
+	// Exact match
+	if strings.Contains(content, search) {
+		res := strings.Replace(content, search, with, 1)
+		if hasCRLF {
+			res = strings.ReplaceAll(res, "\n", "\r\n")
+		}
+		return res, nil
+	}
+
+	// Line-by-line whitespace-tolerant match (ignores trailing spaces)
+	cLines := strings.Split(content, "\n")
+	sLines := strings.Split(search, "\n")
+	if len(sLines) <= len(cLines) {
+		for i := 0; i <= len(cLines)-len(sLines); i++ {
+			matched := true
+			for j := 0; j < len(sLines); j++ {
+				if strings.TrimRight(cLines[i+j], " \t\r") != strings.TrimRight(sLines[j], " \t\r") &&
+					strings.TrimSpace(cLines[i+j]) != strings.TrimSpace(sLines[j]) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				var out []string
+				out = append(out, cLines[:i]...)
+				out = append(out, with)
+				if i+len(sLines) < len(cLines) {
+					out = append(out, cLines[i+len(sLines):]...)
+				}
+				res := strings.Join(out, "\n")
+				if hasCRLF {
+					res = strings.ReplaceAll(res, "\n", "\r\n")
+				}
+				return res, nil
+			}
+		}
+	}
+
+	// Wildcard / ellipsis (...) matching
+	if strings.Contains(search, "...") {
+		parts := strings.Split(search, "...")
+		var reStr bytes.Buffer
+		for i, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed == "" {
+				continue
+			}
+			if i > 0 {
+				reStr.WriteString(`(?s:(.*?))`)
+			}
+			reStr.WriteString(regexp.QuoteMeta(trimmed))
+		}
+		re, err := regexp.Compile(reStr.String())
+		if err == nil && re.MatchString(content) {
+			targetWith := with
+			if strings.Contains(with, "...") {
+				matches := re.FindStringSubmatch(content)
+				if len(matches) > 1 {
+					withParts := strings.Split(with, "...")
+					var b bytes.Buffer
+					for idx, wp := range withParts {
+						b.WriteString(wp)
+						if idx < len(matches)-1 {
+							b.WriteString(matches[idx+1])
+						}
+					}
+					targetWith = b.String()
+				}
+			}
+			res := re.ReplaceAllLiteralString(content, targetWith)
+			if hasCRLF {
+				res = strings.ReplaceAll(res, "\n", "\r\n")
+			}
+			return res, nil
+		}
+	}
+</with>
+</replace>
+
+<replace path="README.md">
+<search>
+> ℹ️ **Where does the output go?**
+> `textify load` does **not** write to a file by default. Without `-c` or `-s`, it prints progress updates and token summaries to your terminal. Use `-c` to copy results to the system clipboard or `-s` to write to standard output.
+</search>
+<with>
+> ℹ️ **Where does the output go?**
+> By default, `textify load` saves the requested codebase context directly into `codebase.txt` (or the file specified in `textify.yaml` or `-o`). Use `-c` to copy results to the system clipboard or `-s` to write to standard output.
+</with>
+</replace>
+
+<replace path="README.md">
+<search>
+- **Save loaded context to a disk file:**
+  ```bash
+  textify load request.xml -s > context.txt
+  ```
+</search>
+<with>
+- **Load request into codebase.txt (Default):**
+  ```bash
+  textify load request.xml
+  ```
+  *(Parses XML directives and bundles context cleanly into `codebase.txt`)*
+
+- **Save loaded context to a custom file:**
+  ```bash
+  textify load request.xml -o context.txt
+  ```
+</with>
+</replace>
+
+<replace path="internal/scanner/request_test.go">
+<search>
+func TestParseDeepTraceAndCaseRequests(t *testing.T) {
+</search>
+<with>
+func TestParseSignaturesRequest(t *testing.T) {
+	input := `
+	<request>
+		<signatures path="internal/scanner" />
+		<signatures glob="*.go" />
+		<file path="main.go" signatures="true" />
+	</request>
+	`
+	reqs := ParseRequest(input)
+	if len(reqs) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(reqs))
+	}
+	if !reqs[0].Signatures || reqs[0].Path != "internal/scanner" {
+		t.Errorf("unexpected signatures req: %+v", reqs[0])
+	}
+	if !reqs[1].Signatures || reqs[1].Glob != "*.go" {
+		t.Errorf("unexpected glob signatures req: %+v", reqs[1])
+	}
+	if !reqs[2].Signatures || reqs[2].Path != "main.go" {
+		t.Errorf("unexpected file signatures req: %+v", reqs[2])
+	}
+}
+
+func TestParseDeepTraceAndCaseRequests(t *testing.T) {
+</with>
+</replace>
+
+<replace path="internal/patcher/patcher_test.go">
+<search>
+func TestApplyDryRun(t *testing.T) {
+</search>
+<with>
+func TestApplyCodeFenceAndLineNumberStripping(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "clean.go")
+	orig := `package main
+
+func greet() {
+	println("hello")
+}
+`
+	if err := os.WriteFile(filePath, []byte(orig), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	patch := `<replace path="clean.go">
+<search>
+   3 | func greet() {
+   4 | 	println("hello")
+   5 | }
+</search>
+<with>
+` + "```go" + `
+func greet() {
+	println("world")
+}
+` + "```" + `
+</with>
+</replace>`
+
+	res, err := Apply(dir, patch, PatchOptions{})
+	if err != nil {
+		t.Fatalf("Apply with code fences/line numbers failed: %v", err)
+	}
+	if len(res.Changes) != 1 {
+		t.Fatalf("Expected 1 change, got %d", len(res.Changes))
+	}
+
+	content, _ := os.ReadFile(filePath)
+	cStr := string(content)
+	if strings.Contains(cStr, "```") {
+		t.Errorf("Code fence was not stripped:\n%s", cStr)
+	}
+	if !strings.Contains(cStr, `println("world")`) {
+		t.Errorf("Updated code missing:\n%s", cStr)
+	}
+}
+
+func TestApplyDryRun(t *testing.T) {
+</with>
+</replace>
+```

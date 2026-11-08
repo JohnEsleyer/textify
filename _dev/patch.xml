@@ -1,0 +1,17 @@
+<replace path="internal/config/config.go">
+<search>
+import (
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+</search>
+<with>
+import (
+	"os"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+</with>
+</replace>

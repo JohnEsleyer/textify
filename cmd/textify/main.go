@@ -15,7 +15,7 @@ import (
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.8.0"
+const version = "0.9.0"
 
 const defaultPrompt = `You are interacting with a codebase managed by Textify.
 
@@ -266,19 +266,35 @@ func runStart(args []string) {
 	redactFlag := fs.Bool("redact", false, "Redact sensitive tokens and secrets")
 	redactShort := fs.Bool("r", false, "Redact sensitive tokens and secrets (shorthand)")
 	treeFlag := fs.Bool("tree", false, "Prepend directory tree")
+	sigGroupsFlag := fs.String("signatures-groups", "", "Comma-separated group names for signatures only")
+	sigGroupsShort := fs.String("sig-groups", "", "Comma-separated group names for signatures only (shorthand)")
+	fullGroupsFlag := fs.String("full-groups", "", "Comma-separated group names for full code")
+	fullGroupsShort := fs.String("full-code-groups", "", "Comma-separated group names for full code (alias)")
+	groupFlag := fs.String("group", "", "Only include directories/files in specific group(s)")
+	groupsFlag := fs.String("groups", "", "Only include directories/files in specific group(s) (alias)")
 
-	valueFlags := map[string]bool{"--config": true, "-config": true, "--format": true, "-format": true, "-f": true}
+	valueFlags := map[string]bool{
+		"--config": true, "-config": true, "--format": true, "-format": true, "-f": true,
+		"--signatures-groups": true, "-signatures-groups": true,
+		"--sig-groups": true, "-sig-groups": true,
+		"--full-groups": true, "-full-groups": true,
+		"--full-code-groups": true, "-full-code-groups": true,
+		"--group": true, "-group": true, "--groups": true, "-groups": true,
+	}
 	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
 
 	executeScan(scanCmdParams{
-		configPath:     *configPath,
-		format:         firstNonEmpty(*formatFlag, *formatShort),
-		stdout:         *stdoutFlag || *stdoutShort,
-		clip:           *clipFlag || *clipShort,
-		redact:         *redactFlag || *redactShort,
-		tree:           *treeFlag,
-		signaturesOnly: false,
-		diffOnly:       false,
+		configPath:       *configPath,
+		format:           firstNonEmpty(*formatFlag, *formatShort),
+		stdout:           *stdoutFlag || *stdoutShort,
+		clip:             *clipFlag || *clipShort,
+		redact:           *redactFlag || *redactShort,
+		tree:             *treeFlag,
+		signaturesOnly:   false,
+		diffOnly:         false,
+		signaturesGroups: splitCommaList(firstNonEmpty(*sigGroupsFlag, *sigGroupsShort)),
+		fullCodeGroups:   splitCommaList(firstNonEmpty(*fullGroupsFlag, *fullGroupsShort)),
+		targetGroups:     splitCommaList(firstNonEmpty(*groupFlag, *groupsFlag)),
 	})
 }
 
@@ -294,8 +310,17 @@ func runSignatures(args []string) {
 	redactFlag := fs.Bool("redact", false, "Redact sensitive tokens and secrets")
 	redactShort := fs.Bool("r", false, "Redact sensitive tokens and secrets (shorthand)")
 	astOverview := fs.Bool("ast", false, "Use AST parser index overview instead of line scan")
+	fullGroupsFlag := fs.String("full-groups", "", "Comma-separated group names for full code")
+	fullGroupsShort := fs.String("full-code-groups", "", "Comma-separated group names for full code (shorthand)")
+	groupFlag := fs.String("group", "", "Only include directories/files in specific group(s)")
+	groupsFlag := fs.String("groups", "", "Only include directories/files in specific group(s) (alias)")
 
-	valueFlags := map[string]bool{"--config": true, "-config": true, "--format": true, "-format": true, "-f": true}
+	valueFlags := map[string]bool{
+		"--config": true, "-config": true, "--format": true, "-format": true, "-f": true,
+		"--full-groups": true, "-full-groups": true,
+		"--full-code-groups": true, "-full-code-groups": true,
+		"--group": true, "-group": true, "--groups": true, "-groups": true,
+	}
 	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
 
 	if *astOverview {
@@ -326,6 +351,8 @@ func runSignatures(args []string) {
 		tree:           false,
 		signaturesOnly: true,
 		diffOnly:       false,
+		fullCodeGroups: splitCommaList(firstNonEmpty(*fullGroupsFlag, *fullGroupsShort)),
+		targetGroups:   splitCommaList(firstNonEmpty(*groupFlag, *groupsFlag)),
 	})
 }
 
@@ -340,8 +367,13 @@ func runDiff(args []string) {
 	clipShort := fs.Bool("c", false, "Copy diff bundle to clipboard (shorthand)")
 	redactFlag := fs.Bool("redact", false, "Redact sensitive tokens and secrets")
 	redactShort := fs.Bool("r", false, "Redact sensitive tokens and secrets (shorthand)")
+	groupFlag := fs.String("group", "", "Only include directories/files in specific group(s)")
+	groupsFlag := fs.String("groups", "", "Only include directories/files in specific group(s) (alias)")
 
-	valueFlags := map[string]bool{"--config": true, "-config": true, "--format": true, "-format": true, "-f": true}
+	valueFlags := map[string]bool{
+		"--config": true, "-config": true, "--format": true, "-format": true, "-f": true,
+		"--group": true, "-group": true, "--groups": true, "-groups": true,
+	}
 	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
 
 	executeScan(scanCmdParams{
@@ -353,6 +385,7 @@ func runDiff(args []string) {
 		tree:           false,
 		signaturesOnly: false,
 		diffOnly:       true,
+		targetGroups:   splitCommaList(firstNonEmpty(*groupFlag, *groupsFlag)),
 	})
 }
 
@@ -729,14 +762,17 @@ func runPrompt(args []string) {
 }
 
 type scanCmdParams struct {
-	configPath     string
-	format         string
-	stdout         bool
-	clip           bool
-	redact         bool
-	tree           bool
-	signaturesOnly bool
-	diffOnly       bool
+	configPath       string
+	format           string
+	stdout           bool
+	clip             bool
+	redact           bool
+	tree             bool
+	signaturesOnly   bool
+	diffOnly         bool
+	signaturesGroups []string
+	fullCodeGroups   []string
+	targetGroups     []string
 }
 
 func executeScan(p scanCmdParams) {
@@ -774,12 +810,15 @@ func executeScan(p scanCmdParams) {
 	}
 
 	scanRes, err := scanner.Scan(cwd, &cfg, writer, scanner.ScanOptions{
-		SignaturesOnly: p.signaturesOnly,
-		DiffOnly:       p.diffOnly,
-		Format:         p.format,
-		RedactSecrets:  p.redact,
-		Tree:           p.tree,
-		Stdout:         p.stdout || p.clip,
+		SignaturesOnly:   p.signaturesOnly,
+		DiffOnly:         p.diffOnly,
+		Format:           p.format,
+		RedactSecrets:    p.redact,
+		Tree:             p.tree,
+		Stdout:           p.stdout || p.clip,
+		SignaturesGroups: p.signaturesGroups,
+		FullCodeGroups:   p.fullCodeGroups,
+		TargetGroups:     p.targetGroups,
 	})
 
 	if err != nil {
@@ -849,4 +888,18 @@ func formatBytes(bytes int64) string {
 		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
 	}
 	return fmt.Sprintf("%.2f MB", float64(bytes)/(1024*1024))
+}
+
+func splitCommaList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var res []string
+	for _, part := range strings.Split(s, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			res = append(res, trimmed)
+		}
+	}
+	return res
 }

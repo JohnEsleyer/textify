@@ -14,13 +14,16 @@ import (
 
 // ScanOptions controls advanced scanning, formatting, and filtering behaviors.
 type ScanOptions struct {
-	SignaturesOnly bool
-	DiffOnly       bool
-	Format         string
-	MaxFileSize    int64
-	RedactSecrets  bool
-	Tree           bool
-	Stdout         bool
+	SignaturesOnly   bool
+	DiffOnly         bool
+	Format           string
+	MaxFileSize      int64
+	RedactSecrets    bool
+	Tree             bool
+	Stdout           bool
+	SignaturesGroups []string
+	FullCodeGroups   []string
+	TargetGroups     []string
 }
 
 // ScanResult contains metadata and statistics about the completed scan.
@@ -55,7 +58,7 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 
 	// Collect matching files
 	var matchedFiles []string
-	if err := collectFiles(rootPath, rootPath, cfg, rootRule, chain, changedFiles, &matchedFiles); err != nil {
+	if err := collectFiles(rootPath, rootPath, cfg, chain, changedFiles, opts.TargetGroups, &matchedFiles); err != nil {
 		return nil, err
 	}
 
@@ -96,13 +99,10 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 	for _, relPath := range matchedFiles {
 		absPath := filepath.Join(rootPath, filepath.FromSlash(relPath))
 
-		dirPath := filepath.Dir(relPath)
-		rule := rootRule
-		if r, exists := cfg.Dirs[dirPath]; exists {
-			rule = r
-		}
+		rule := resolveEffectiveRule(relPath, cfg, rootRule)
 
-		addedBytes, redacted, err := appendFileContent(absPath, relPath, rule, bufWriter, opts.SignaturesOnly, format, maxSize, opts.RedactSecrets)
+		useSignatures := shouldExtractSignatures(relPath, rule.Group, opts.SignaturesOnly, cfg, opts)
+		addedBytes, redacted, err := appendFileContent(absPath, relPath, rule, bufWriter, useSignatures, format, maxSize, opts.RedactSecrets)
 		if err != nil {
 			continue
 		}
@@ -112,14 +112,15 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 		result.RedactedSecrets += redacted
 
 		modeSuffix := ""
-		if opts.SignaturesOnly {
-			if IsDocFile(relPath) {
-				modeSuffix = " (full doc)"
-			} else {
-				modeSuffix = " (signatures)"
-			}
+		if useSignatures {
+			modeSuffix = " (signatures)"
+		} else if opts.SignaturesOnly && IsDocFile(relPath) {
+			modeSuffix = " (full doc)"
 		} else if rule.Compact {
 			modeSuffix = " (compacted)"
+		}
+		if rule.Group != "" {
+			modeSuffix += fmt.Sprintf(" [group: %s]", rule.Group)
 		}
 		if !opts.Stdout {
 			fmt.Printf("Added: %s%s\n", relPath, modeSuffix)
@@ -134,9 +135,9 @@ func collectFiles(
 	fullPath string,
 	rootPath string,
 	cfg *config.Config,
-	currentRule config.DirRule,
 	ignoreChain config.GitIgnoreChain,
 	changedFiles map[string]bool,
+	targetGroups []string,
 	matchedFiles *[]string,
 ) error {
 	relDir, _ := filepath.Rel(rootPath, fullPath)
@@ -146,10 +147,12 @@ func collectFiles(
 		relDir = filepath.ToSlash(relDir)
 	}
 
-	if specificRule, exists := cfg.Dirs[relDir]; exists {
-		currentRule = specificRule
+	rootRule, ok := cfg.Dirs["."]
+	if !ok {
+		rootRule = config.DirRule{Enabled: true}
 	}
 
+	currentRule := resolveEffectiveRule(relDir, cfg, rootRule)
 	if !currentRule.Enabled {
 		return nil
 	}
@@ -169,11 +172,13 @@ func collectFiles(
 			continue
 		}
 
-		if checkPatternMatch(entry.Name(), relEntryPath, currentRule.Exclude) {
+		entryRule := resolveEffectiveRule(relEntryPath, cfg, rootRule)
+
+		if checkPatternMatch(entry.Name(), relEntryPath, entryRule.Exclude) {
 			continue
 		}
 
-		isForced := checkPatternMatch(entry.Name(), relEntryPath, currentRule.Include)
+		isForced := checkPatternMatch(entry.Name(), relEntryPath, entryRule.Include)
 
 		if entry.IsDir() {
 			isIgnored := ignoreChain.Match(entryPath, true)
@@ -184,8 +189,9 @@ func collectFiles(
 			}
 
 			isExplicitlyEnabled := hasExplicitRule && explicitRule.Enabled
+			isDirForced := isForced || hasIncludePrefix(relEntryPath, entryRule.Include)
 
-			if isIgnored && !isForced && !isExplicitlyEnabled {
+			if isIgnored && !isDirForced && !isExplicitlyEnabled {
 				continue
 			}
 
@@ -196,7 +202,7 @@ func collectFiles(
 				subChain = ignoreChain.AddIfExists(entryPath)
 			}
 
-			if err := collectFiles(entryPath, rootPath, cfg, currentRule, subChain, changedFiles, matchedFiles); err != nil {
+			if err := collectFiles(entryPath, rootPath, cfg, subChain, changedFiles, targetGroups, matchedFiles); err != nil {
 				return err
 			}
 			continue
@@ -212,14 +218,18 @@ func collectFiles(
 			}
 		}
 
-		if !isForced && len(currentRule.ExcludeExtensions) > 0 {
-			if contains(currentRule.ExcludeExtensions, ext) {
+		if len(targetGroups) > 0 && !containsCaseInsensitive(targetGroups, entryRule.Group) {
+			continue
+		}
+
+		if !isForced && len(entryRule.ExcludeExtensions) > 0 {
+			if contains(entryRule.ExcludeExtensions, ext) {
 				continue
 			}
 		}
 
-		if !isForced && len(currentRule.Extensions) > 0 {
-			if !contains(currentRule.Extensions, ext) {
+		if !isForced && len(entryRule.Extensions) > 0 {
+			if !contains(entryRule.Extensions, ext) {
 				continue
 			}
 		}
@@ -259,11 +269,114 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+func resolveEffectiveRule(relPath string, cfg *config.Config, rootRule config.DirRule) config.DirRule {
+	effective := rootRule
+
+	cleanRel := filepath.ToSlash(filepath.Clean(relPath))
+	if cleanRel == "." || cleanRel == "" {
+		return effective
+	}
+
+	parts := strings.Split(cleanRel, "/")
+	current := ""
+	for i, part := range parts {
+		if i == 0 {
+			current = part
+		} else {
+			current = current + "/" + part
+		}
+
+		rule, exists := cfg.Dirs[current]
+		if !exists {
+			continue
+		}
+
+		effective.Enabled = rule.Enabled
+
+		if rule.Compact {
+			effective.Compact = true
+		}
+
+		if rule.Group != "" {
+			effective.Group = rule.Group
+		}
+
+		if len(rule.Extensions) > 0 {
+			effective.Extensions = rule.Extensions
+		}
+
+		for _, ext := range rule.ExcludeExtensions {
+			if !contains(effective.ExcludeExtensions, ext) {
+				effective.ExcludeExtensions = append(effective.ExcludeExtensions, ext)
+			}
+		}
+
+		for _, inc := range rule.Include {
+			if !contains(effective.Include, inc) {
+				effective.Include = append(effective.Include, inc)
+			}
+		}
+
+		for _, exc := range rule.Exclude {
+			if !contains(effective.Exclude, exc) {
+				effective.Exclude = append(effective.Exclude, exc)
+			}
+		}
+	}
+
+	return effective
+}
+
+func hasIncludePrefix(relPath string, includes []string) bool {
+	prefix := relPath + "/"
+	for _, inc := range includes {
+		inc = filepath.ToSlash(inc)
+		if strings.HasPrefix(inc, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldExtractSignatures(relPath string, group string, globalSigsOnly bool, cfg *config.Config, opts ScanOptions) bool {
+	if IsDocFile(relPath) {
+		return false
+	}
+
+	if group != "" {
+		if containsCaseInsensitive(opts.SignaturesGroups, group) {
+			return true
+		}
+		if containsCaseInsensitive(opts.FullCodeGroups, group) {
+			return false
+		}
+		if cfg != nil {
+			if cfg.IsGroupSignaturesOnly(group) {
+				return true
+			}
+			if cfg.IsGroupFullCode(group) {
+				return false
+			}
+		}
+	}
+
+	return globalSigsOnly
+}
+
+func containsCaseInsensitive(slice []string, item string) bool {
+	for _, s := range slice {
+		if strings.EqualFold(s, item) {
+			return true
+		}
+	}
+	return false
+}
+
 func appendFileContent(
 	absPath, relPath string,
 	rule config.DirRule,
 	writer *bufio.Writer,
-	signaturesOnly bool,
+	useSignatures bool,
 	format string,
 	maxSize int64,
 	redactSecrets bool,
@@ -292,9 +405,7 @@ func appendFileContent(
 
 	content := string(rawBytes)
 
-	useSignatures := signaturesOnly && !IsDocFile(relPath)
-
-	if useSignatures {
+	if useSignatures && !IsDocFile(relPath) {
 		content = ExtractSignatures(relPath, content)
 	} else if rule.Compact {
 		var sb strings.Builder

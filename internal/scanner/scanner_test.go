@@ -341,3 +341,140 @@ func assertNotContains(t *testing.T, output, substr string) {
 		t.Errorf("Expected output NOT to contain '%s', but it did.", substr)
 	}
 }
+
+func TestScanGroupSignaturesAndFullCode(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_group_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	os.MkdirAll(filepath.Join(tempDir, "controllers"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "models"), 0755)
+
+	ctrlCode := `package controllers
+
+func GetUser() string {
+	return "full_ctrl_body"
+}
+`
+	modelCode := `package models
+
+type User struct {
+	ID string
+}
+
+func (u *User) Save() bool {
+	return true
+}
+`
+	createFile(t, tempDir, "controllers/user.go", ctrlCode)
+	createFile(t, tempDir, "models/user.go", modelCode)
+
+	cfg := &config.Config{
+		OutputFile:       "codebase.txt",
+		SignaturesGroups: []string{"db"},
+		FullCodeGroups:   []string{"api"},
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled: true,
+			},
+			"controllers": {
+				Enabled: true,
+				Group:   "api",
+			},
+			"models": {
+				Enabled: true,
+				Group:   "db",
+			},
+		},
+	}
+
+	// 1. Scan with SignaturesOnly = false (like textify start)
+	var buf bytes.Buffer
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, SignaturesOnly: false})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	outStart := buf.String()
+
+	// Controllers (api group) should be full code
+	assertContains(t, outStart, "return \"full_ctrl_body\"")
+	// Models (db group) should be signatures only
+	assertContains(t, outStart, "type User struct {")
+	assertContains(t, outStart, "func (u *User) Save() bool")
+	assertNotContains(t, outStart, "return true")
+
+	// 2. Scan with SignaturesOnly = true (like textify signatures)
+	buf.Reset()
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, SignaturesOnly: true})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	outSigs := buf.String()
+
+	// Controllers (api group) is explicitly in full_code_groups, so it remains full code
+	assertContains(t, outSigs, "return \"full_ctrl_body\"")
+	// Models remains signatures only
+	assertNotContains(t, outSigs, "return true")
+
+	// 3. Scan with TargetGroups filter (like textify start --group api)
+	buf.Reset()
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, TargetGroups: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	outFiltered := buf.String()
+	assertContains(t, outFiltered, "controllers/user.go")
+	assertNotContains(t, outFiltered, "models/user.go")
+}
+
+func TestSubdirectoryInheritsExtensionsAndExcludes(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "scanner_inherit_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	os.MkdirAll(filepath.Join(tempDir, "pkg", "api"), 0755)
+
+	createFile(t, tempDir, "pkg/api/service.go", "package api\nfunc Run() {}\n")
+	createFile(t, tempDir, "pkg/api/bad.go", "package api\n")
+	createFile(t, tempDir, "pkg/api/temp.log", "some log\n")
+	createFile(t, tempDir, "pkg/api/secret.env", "SECRET=1\n")
+
+	os.WriteFile(filepath.Join(tempDir, ".gitignore"), []byte("*.env\n"), 0644)
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled:           true,
+				Extensions:        []string{"go"},
+				ExcludeExtensions: []string{"log"},
+				Include:           []string{"secret.env"},
+				Exclude:           []string{"bad.go"},
+			},
+			"pkg/api": {
+				Enabled: true,
+				Group:   "api",
+				// Does not specify extensions/include/exclude -> must inherit from root!
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	_, err = Scan(tempDir, cfg, &buf, ScanOptions{Tree: false, TargetGroups: []string{"api"}})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+	out := buf.String()
+
+	// Should include service.go and forced secret.env
+	assertContains(t, out, "pkg/api/service.go")
+	assertContains(t, out, "pkg/api/secret.env")
+
+	// Should respect inherited exclude and exclude_extensions
+	assertNotContains(t, out, "pkg/api/bad.go")
+	assertNotContains(t, out, "pkg/api/temp.log")
+}

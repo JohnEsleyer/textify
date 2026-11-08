@@ -1,6 +1,6 @@
 # Textify ⚡
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -184,6 +184,61 @@ Bundle complete end-to-end features (definitions + traces + touchpoints) in one 
 
 ---
 
+## ⚙️ Configuration & Directory Grouping (`textify.yaml`)
+
+Directories can be tagged with an optional `group` property in `textify.yaml`. You can configure which groups export lightweight symbol signatures versus full source code, saving tokens while preserving implementation details where needed:
+
+```yaml
+# textify.yaml
+output_file: codebase.txt
+format: tags
+
+# Specify group extraction modes
+signatures_groups:
+  - models
+  - generated
+
+full_code_groups:
+  - core
+  - api
+
+# Or configure modes via the groups map:
+groups:
+  helpers: signatures
+  services: full
+
+dirs:
+  cmd/api:
+    enabled: true
+    group: api
+
+  internal/core:
+    enabled: true
+    group: core
+
+  internal/models:
+    enabled: true
+    group: models
+
+  internal/generated:
+    enabled: true
+    group: generated
+```
+
+When running `textify start`, directories in `signatures_groups` have function bodies stripped, while `full_code_groups` include complete implementations.
+
+You can also filter or override groups dynamically from the CLI:
+
+```bash
+# Bundle only directories and files belonging to a specific group
+textify start --group=core -c
+
+# Bundle with custom signature and full-code groups
+textify start --signatures-groups=models,helpers --full-groups=api
+```
+
+---
+
 ## 🤖 System Prompt for LLMs (Enforcing 1–2 Request Workflows)
 
 Paste this prompt alongside your codebase signatures or output from `textify prompt`:
@@ -361,7 +416,7 @@ func main() {}
 | `textify load [file] [flags]` | Reads request XML and outputs requested slices, traces, and files. |
 | `textify patch [file] [flags]` | Applies LLM patch bundle atomically using two-pass VFS. |
 | `textify prompt` | Prints copy-pasteable instructions for the LLM. |
-| `textify version` | Prints current version (`0.8.0`). |
+| `textify version` | Prints current version (`0.9.0`). |
 
 ### CLI Flags Cheat Sheet
 
