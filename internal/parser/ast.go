@@ -3,51 +3,26 @@ package parser
 import (
 	"fmt"
 	"strings"
+
+	"github.com/JohnEsleyer/textify/internal/targets"
 )
 
-// SymbolKind indicates the category of a parsed syntax element.
-type SymbolKind string
+// Re-export target types for seamless backward compatibility. Parser consumers
+// continue to use parser.Symbol and parser.KindFunction while the canonical
+// definitions live in internal/targets.
+type SymbolKind = targets.SymbolKind
+type Symbol = targets.Symbol
 
 const (
-	KindFunction  SymbolKind = "function"
-	KindMethod    SymbolKind = "method"
-	KindStruct    SymbolKind = "struct"
-	KindClass     SymbolKind = "class"
-	KindInterface SymbolKind = "interface"
-	KindType      SymbolKind = "type"
+	KindFunction  = targets.KindFunction
+	KindMethod    = targets.KindMethod
+	KindStruct    = targets.KindStruct
+	KindClass     = targets.KindClass
+	KindInterface = targets.KindInterface
+	KindType      = targets.KindType
+	KindComponent = targets.KindComponent
+	KindHook      = targets.KindHook
 )
-
-// Symbol represents an AST-parsed entity (function, struct, method, etc.).
-type Symbol struct {
-	Name       string     `json:"name"`
-	Receiver   string     `json:"receiver,omitempty"` // For Go methods or class methods
-	Kind       SymbolKind `json:"kind"`
-	File       string     `json:"file"`
-	StartLine  int        `json:"start_line"`
-	EndLine    int        `json:"end_line"`
-	Signature  string     `json:"signature"`
-	Body       string     `json:"body,omitempty"`
-	Calls      []string   `json:"calls,omitempty"`      // Identifiers called inside this function
-	References []string   `json:"references,omitempty"` // Types/structs referenced
-}
-
-// FullName returns the qualified name (e.g., (Receiver).Method or Function).
-func (s Symbol) FullName() string {
-	if s.Receiver != "" {
-		return fmt.Sprintf("(%s).%s", s.Receiver, s.Name)
-	}
-	return s.Name
-}
-
-// IsTypeKind reports whether the symbol is a type-like declaration whose
-// dependencies can be traced instead of an execution flow.
-func (s Symbol) IsTypeKind() bool {
-	switch s.Kind {
-	case KindStruct, KindClass, KindInterface:
-		return true
-	}
-	return false
-}
 
 // Language represents supported parsing languages.
 type Language string
