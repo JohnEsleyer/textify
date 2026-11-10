@@ -15,7 +15,7 @@ import (
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.9.0"
+const version = "0.10.0"
 
 const defaultPrompt = `You are interacting with a codebase managed by Textify.
 
