@@ -32,3 +32,5 @@ dirs:
         enabled: true
         extensions:
             - go
+    _dev:
+        enabled: false
