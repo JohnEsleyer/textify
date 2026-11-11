@@ -8,6 +8,7 @@ import (
 	_ "github.com/JohnEsleyer/textify/internal/targets/css"
 	_ "github.com/JohnEsleyer/textify/internal/targets/golang"
 	_ "github.com/JohnEsleyer/textify/internal/targets/html"
+	_ "github.com/JohnEsleyer/textify/internal/targets/jvm"
 	_ "github.com/JohnEsleyer/textify/internal/targets/react"
 )
 
@@ -36,6 +37,16 @@ func TestRegistryDispatchesByFileTarget(t *testing.T) {
 			path:    "theme.css",
 			content: ":root {\n--brand: red;\n}\n.btn {\ncolor: red;\n}\n",
 			want:    ".btn { /* ... */ }",
+		},
+		{
+			path:    "UserService.java",
+			content: "package com.example;\npublic class UserService {\n    public void save() {\n        System.out.println(1);\n    }\n}\n",
+			want:    "public void save() { /* ... */ }",
+		},
+		{
+			path:    "App.kt",
+			content: "package com.example\nfun run() {\n    println(1)\n}\n",
+			want:    "fun run() { /* ... */ }",
 		},
 	}
 

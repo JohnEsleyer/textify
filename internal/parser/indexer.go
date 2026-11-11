@@ -69,6 +69,22 @@ func BuildIndex(root string, langs map[Language]bool) (*CodebaseIndex, error) {
 					fileSymbols = append(fileSymbols, syms...)
 				}
 			}
+		} else if ext == ".java" && langs[LangJava] {
+			data, readErr := os.ReadFile(path)
+			if readErr == nil {
+				syms, parseErr := ParseJavaFile(relPath, data)
+				if parseErr == nil {
+					fileSymbols = append(fileSymbols, syms...)
+				}
+			}
+		} else if (ext == ".kt" || ext == ".kts") && langs[LangKotlin] {
+			data, readErr := os.ReadFile(path)
+			if readErr == nil {
+				syms, parseErr := ParseKotlinFile(relPath, data)
+				if parseErr == nil {
+					fileSymbols = append(fileSymbols, syms...)
+				}
+			}
 		}
 
 		if len(fileSymbols) > 0 {

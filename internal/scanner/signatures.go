@@ -9,6 +9,7 @@ import (
 	_ "github.com/JohnEsleyer/textify/internal/targets/css"
 	_ "github.com/JohnEsleyer/textify/internal/targets/golang"
 	_ "github.com/JohnEsleyer/textify/internal/targets/html"
+	_ "github.com/JohnEsleyer/textify/internal/targets/jvm"
 	_ "github.com/JohnEsleyer/textify/internal/targets/react"
 )
 

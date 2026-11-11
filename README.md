@@ -451,7 +451,7 @@ func main() {}
 | `textify tokens, dirs [flags]` | Lists included folders and estimated token sizes (largest to smallest). |
 | `textify diff [flags]` | Bundles only modified, staged, or untracked Git files. |
 | `textify trace <symbol> [flags]` | Traces function call flow and callee implementations (`--deep`, `--depth`). |
-| `textify def <symbol> [flags]` | Extracts AST definition of function/struct/class (Go/TypeScript). |
+| `textify def <symbol> [flags]` | Extracts AST definition of function/struct/class (Go/TypeScript/Java/Kotlin). |
 | `textify grep <pattern> [flags]` | Searches pattern across workspace with context lines. |
 | `textify load [file] [flags]` | Reads request XML and outputs requested slices, traces, and files. |
 | `textify patch [file] [flags]` | Applies LLM patch bundle atomically using two-pass VFS. |

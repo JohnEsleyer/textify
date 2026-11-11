@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/JohnEsleyer/textify/internal/targets/golang"
+	"github.com/JohnEsleyer/textify/internal/targets/jvm"
 )
 
 // ParseGoFile delegates Go source parsing to the golang target package.
@@ -18,11 +19,17 @@ func CleanCaseTarget(s string) string {
 }
 
 // ExtractCase extracts the body, start line, and end line of a switch-case
-// clause from a Go file (using the AST) or any other file (generic fallback).
+// clause from a Go file (using AST), a Java/Kotlin file (using JVM case extractor),
+// or any other file (generic fallback).
 func ExtractCase(filePath, content, fnName, caseTarget string) (string, int, int, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == ".go" {
 		body, start, end, err := golang.ExtractGoCase(filePath, content, fnName, caseTarget)
+		if err == nil {
+			return body, start, end, nil
+		}
+	} else if ext == ".java" || ext == ".kt" || ext == ".kts" {
+		body, start, end, err := jvm.ExtractJVMCase(filePath, content, fnName, caseTarget)
 		if err == nil {
 			return body, start, end, nil
 		}

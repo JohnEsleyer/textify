@@ -233,12 +233,57 @@ func TestTypeScriptIndexFlow(t *testing.T) {
 }
 
 func TestParseLanguages(t *testing.T) {
-	langs := ParseLanguages("go,ts")
-	if !langs[LangGo] || !langs[LangTypeScript] {
-		t.Errorf("ParseLanguages(go,ts) = %v", langs)
+	langs := ParseLanguages("go,ts,java,kotlin")
+	if !langs[LangGo] || !langs[LangTypeScript] || !langs[LangJava] || !langs[LangKotlin] {
+		t.Errorf("ParseLanguages(go,ts,java,kotlin) = %v", langs)
 	}
-	if len(ParseLanguages("javascript")) != 1 || !ParseLanguages("javascript")[LangTypeScript] {
-		t.Errorf("ParseLanguages(javascript) should select TypeScript")
+	if len(ParseLanguages("jvm")) != 2 || !ParseLanguages("jvm")[LangJava] || !ParseLanguages("jvm")[LangKotlin] {
+		t.Errorf("ParseLanguages(jvm) should select Java and Kotlin")
+	}
+}
+
+func TestJavaAndKotlinIndexFlow(t *testing.T) {
+	dir := t.TempDir()
+	javaSrc := `package sample;
+public class OrderService {
+    public void createOrder() {
+        validateOrder();
+    }
+    private void validateOrder() {}
+}
+`
+	ktSrc := `package sample
+fun calculateTotal() {
+    applyDiscount()
+}
+fun applyDiscount() {}
+`
+	writeTestFile(t, dir, "OrderService.java", javaSrc)
+	writeTestFile(t, dir, "calc.kt", ktSrc)
+
+	idx, err := BuildIndex(dir, ParseLanguages("all"))
+	if err != nil {
+		t.Fatalf("BuildIndex failed: %v", err)
+	}
+
+	matchesJava := idx.FindDefinition("OrderService.createOrder", "")
+	if len(matchesJava) != 1 || matchesJava[0].Name != "createOrder" {
+		t.Fatalf("OrderService.createOrder matches = %+v", matchesJava)
+	}
+
+	flowJava := idx.TraceFlow("createOrder", 5)
+	if !strings.Contains(flowJava, "createOrder()") || !strings.Contains(flowJava, "validateOrder()") {
+		t.Errorf("TraceFlow(createOrder) missing callees:\n%s", flowJava)
+	}
+
+	matchesKt := idx.FindDefinition("calculateTotal", "")
+	if len(matchesKt) != 1 || matchesKt[0].Name != "calculateTotal" {
+		t.Fatalf("calculateTotal matches = %+v", matchesKt)
+	}
+
+	flowKt := idx.TraceFlow("calculateTotal", 5)
+	if !strings.Contains(flowKt, "calculateTotal()") || !strings.Contains(flowKt, "applyDiscount()") {
+		t.Errorf("TraceFlow(calculateTotal) missing callees:\n%s", flowKt)
 	}
 }
 
