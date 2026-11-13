@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -129,5 +130,88 @@ dirs:
 	}
 	if cfg.IsGroupFullCode("unknown") {
 		t.Errorf("'unknown' group should not be full code")
+	}
+}
+
+func TestYamlErrorGuidanceForIndentedList(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "textify.yaml")
+
+	badYaml := `output_file: codebase.txt
+dirs:
+    internal:
+        enabled: true
+            - .
+            - /config
+            - /fileutil
+`
+	if err := os.WriteFile(filePath, []byte(badYaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(filePath)
+	if err == nil {
+		t.Fatalf("expected error on invalid yaml indentation, got nil")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "include:") {
+		t.Errorf("expected error message to suggest 'include:', got:\n%s", errMsg)
+	}
+	if !strings.Contains(errMsg, "enabled") {
+		t.Errorf("expected error message to mention 'enabled', got:\n%s", errMsg)
+	}
+}
+
+func TestFlexibleScalarsAndLists(t *testing.T) {
+	tempDir := t.TempDir()
+	filePath := filepath.Join(tempDir, "textify.yaml")
+
+	yamlData := `output_file: codebase.txt
+dirs:
+    /cmd:
+        enabled: "true"
+        extensions: go
+        include: /main.go
+    /internal:
+        enabled:
+            - config
+            - fileutil
+        exclude: obsolete.go
+`
+	if err := os.WriteFile(filePath, []byte(yamlData), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(filePath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Slashes in dir keys should be normalized
+	if _, ok := cfg.Dirs["cmd"]; !ok {
+		t.Errorf("expected cmd key to be normalized from /cmd")
+	}
+	if _, ok := cfg.Dirs["internal"]; !ok {
+		t.Errorf("expected internal key to be normalized from /internal")
+	}
+
+	cmdRule := cfg.Dirs["cmd"]
+	if len(cmdRule.Extensions) != 1 || cmdRule.Extensions[0] != "go" {
+		t.Errorf("expected scalar extension 'go' to be parsed: %v", cmdRule.Extensions)
+	}
+	if len(cmdRule.Include) != 1 || cmdRule.Include[0] != "main.go" {
+		t.Errorf("expected include '/main.go' to be normalized to 'main.go': %v", cmdRule.Include)
+	}
+
+	internalRule := cfg.Dirs["internal"]
+	if !internalRule.Enabled {
+		t.Errorf("internal should be enabled")
+	}
+	if len(internalRule.Include) != 2 || internalRule.Include[0] != "config" || internalRule.Include[1] != "fileutil" {
+		t.Errorf("expected enabled sequence to populate include: %v", internalRule.Include)
+	}
+	if len(internalRule.Exclude) != 1 || internalRule.Exclude[0] != "obsolete.go" {
+		t.Errorf("expected exclude 'obsolete.go': %v", internalRule.Exclude)
 	}
 }

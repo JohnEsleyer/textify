@@ -321,6 +321,9 @@ func TestGitignoredFolderExplicitlyEnabled(t *testing.T) {
 
 func createFile(t *testing.T, dir, name, content string) {
 	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -536,4 +539,86 @@ func TestSubdirectoryInheritsExtensionsAndExcludes(t *testing.T) {
 	// Should respect inherited exclude and exclude_extensions
 	assertNotContains(t, out, "pkg/api/bad.go")
 	assertNotContains(t, out, "pkg/api/temp.log")
+}
+
+func TestScannerFollowsSubdirectoryIncludeExcludeWithSlashes(t *testing.T) {
+	tempDir := t.TempDir()
+
+	createFile(t, tempDir, "main.go", "package main\n")
+	createFile(t, tempDir, "go.mod", "module test\n")
+	createFile(t, tempDir, "cmd/textify/main.go", "package main\n")
+	createFile(t, tempDir, "cmd/book.json", "{}\n")
+
+	createFile(t, tempDir, "internal/errors.go", "package internal\n")
+	createFile(t, tempDir, "internal/generic.go", "package internal\n")
+	createFile(t, tempDir, "internal/config/config.go", "package config\n")
+	createFile(t, tempDir, "internal/targets/golang/golang.go", "package golang\n")
+	createFile(t, tempDir, "internal/targets/html/html.go", "package html\n")
+	createFile(t, tempDir, "internal/targets/jvm/java.go", "package jvm\n")
+	createFile(t, tempDir, "internal/book.json", "{}\n")
+
+	createFile(t, tempDir, "_dev/notes.md", "# Notes\n")
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled:    true,
+				Extensions: []string{"go", "mod"},
+			},
+			"cmd": {
+				Enabled:    true,
+				Extensions: []string{"go"},
+			},
+			"internal": {
+				Enabled: true,
+				Include: []string{
+					".",
+					"/config",
+					"/targets/golang",
+					"errors.go",
+					"generic.go",
+				},
+				Exclude: []string{
+					"/targets/html",
+					"/targets/jvm",
+				},
+				Extensions: []string{"go"},
+			},
+			"_dev": {
+				Enabled: false,
+			},
+		},
+	}
+	cfg.Normalize()
+
+	var buf bytes.Buffer
+	_, err := Scan(tempDir, cfg, &buf, ScanOptions{Tree: false})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	out := buf.String()
+
+	// Root allowed files
+	assertContains(t, out, "main.go")
+	assertContains(t, out, "go.mod")
+
+	// cmd folder
+	assertContains(t, out, "cmd/textify/main.go")
+	assertNotContains(t, out, "cmd/book.json")
+
+	// internal folder: included files
+	assertContains(t, out, "internal/config/config.go")
+	assertContains(t, out, "internal/targets/golang/golang.go")
+	assertContains(t, out, "internal/errors.go")
+	assertContains(t, out, "internal/generic.go")
+
+	// internal folder: excluded files/folders
+	assertNotContains(t, out, "internal/targets/html/html.go")
+	assertNotContains(t, out, "internal/targets/jvm/java.go")
+	assertNotContains(t, out, "internal/book.json")
+
+	// disabled folder
+	assertNotContains(t, out, "_dev/notes.md")
 }

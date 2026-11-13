@@ -193,13 +193,33 @@ Textify supports fine-grained control over which files and folders are bundled, 
 When you run `textify init`, Textify auto-discovers your directory tree, detects visible file extensions, and generates a fully documented `textify.yaml`:
 
 ```yaml
-# Textify Configuration
+# ==============================================================================
+# Textify Configuration (textify.yaml)
+# ==============================================================================
 #
-# output_file: Path where the merged codebase text will be saved.
-# format:      Output format ("raw", "markdown", or "tags")
-# tree:        Prepend ASCII directory tree (default true)
-# max_file_size: File size limit in bytes (default 500KB)
-# dirs:        Directory-specific configurations. Keys are paths relative to root.
+# output_file:   Path where merged codebase text is saved (default: codebase.txt).
+# format:        Output format: "tags" (recommended for LLMs), "raw", or "markdown".
+# tree:          Prepend ASCII directory structure tree (default: true).
+# max_file_size: Max file size in bytes to include (default: 512000 / 500KB).
+#
+# ------------------------------------------------------------------------------
+# HOW TO CONFIGURE DIRECTORIES (dirs:)
+# ------------------------------------------------------------------------------
+# Every key under 'dirs:' is a directory path relative to project root (use "." for root).
+# Do NOT use leading slashes in dir keys (e.g., use "cmd", NOT "/cmd").
+#
+# RULE OPTIONS PER DIRECTORY:
+#   enabled:            (bool)   true to scan this folder, false to skip it and its children.
+#                                NOTE: 'enabled' only takes true/false. Do NOT put file lists here.
+#   include:            ([list]) Specific files or subfolders to Force Include.
+#                                Overrides .gitignore and extension filters!
+#                                Examples: [config, targets/golang, errors.go]
+#   exclude:            ([list]) Specific files or subfolders to Force Exclude (highest priority).
+#                                Examples: [targets/html, targets/jvm, obsolete.go]
+#   extensions:         ([list]) Allow-list of extensions (e.g., [go, md, json]).
+#   exclude_extensions: ([list]) Block-list of extensions (e.g., [log, tmp, lock]).
+#   group:              (string) Group name to categorize this folder (e.g., api, core, models).
+#   compact:            (bool)   true to strip non-essential whitespace to save LLM tokens.
 
 output_file: codebase.txt
 format: tags
@@ -234,14 +254,32 @@ dirs:
     exclude:
       - obsolete.go
 
-  cmd/api:
+  cmd:
     enabled: true
-    group: api
+    extensions:
+      - go
 
-  internal/core:
+  internal:
     enabled: true
-    group: core
-    compact: true
+    include:
+      - config
+      - fileutil
+      - parser
+      - scanner
+      - targets/golang
+      - errors.go
+    exclude:
+      - targets/html
+      - targets/jvm
+      - targets/react
+    extensions:
+      - go
+```
+
+### Validate Configuration Anytime
+Run `textify check` to validate your `textify.yaml` syntax, verify directory paths against disk, and preview active rules:
+```bash
+textify check
 ```
 
 ### Rule & Filtering Options per Directory (`dirs`)
@@ -446,6 +484,7 @@ func main() {}
 | :--- | :--- |
 | `textify init` | Scans workspace and creates `textify.yaml`. |
 | `textify scan` | Discovers new folders and appends them to `textify.yaml`. |
+| `textify check` | Validates `textify.yaml` syntax, checks disk paths, and previews rules. |
 | `textify start [flags]` | Bundles full project codebase into context file (`--full` to force full code). |
 | `textify signatures, sig [flags]` | Extracts types, structs, interfaces, and function headers. |
 | `textify tokens, dirs [flags]` | Lists included folders and estimated token sizes (largest to smallest). |

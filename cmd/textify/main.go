@@ -36,44 +36,44 @@ When inspecting code, use structural XML directives:
 
 When returning code modifications, format changes using atomic patch directives:
 - Create/overwrite file:
-  <file path="path/to/file.ext">
+  ` + "\x3cfile" + ` path="path/to/file.ext">
   file contents here
-  </file>
+  ` + "\x3c/file" + `>
 
 - Replace with search block (supports '...' wildcards):
-  <replace path="path/to/file.ext" [within="functionName"]>
-  <search>
+  ` + "\x3creplace" + ` path="path/to/file.ext" [within="functionName"]>
+  ` + "\x3csearch" + `>
   code to find
-  </search>
-  <with>
+  ` + "\x3c/search" + `>
+  ` + "\x3cwith" + `>
   replacement code
-  </with>
-  </replace>
+  ` + "\x3c/with" + `>
+  ` + "\x3c/replace" + `>
 
 - Replace switch-case block via AST:
-  <replace path="path/to/file.ext" fn="funcName" case="caseTarget">
-  <with>
+  ` + "\x3creplace" + ` path="path/to/file.ext" fn="funcName" case="caseTarget">
+  ` + "\x3cwith" + `>
       case target:
           new implementation
-  </with>
-  </replace>
+  ` + "\x3c/with" + `>
+  ` + "\x3c/replace" + `>
 
 - Replace AST symbol definition:
-  <replace path="path/to/file.ext" symbol="SymbolName">
-  <with>
+  ` + "\x3creplace" + ` path="path/to/file.ext" symbol="SymbolName">
+  ` + "\x3cwith" + `>
   func SymbolName() { ... }
-  </with>
-  </replace>
+  ` + "\x3c/with" + `>
+  ` + "\x3c/replace" + `>
 
 - Anchor insertions:
-  <replace path="path/to/file.ext" after="anchor line">
-  <with>
+  ` + "\x3creplace" + ` path="path/to/file.ext" after="anchor line">
+  ` + "\x3cwith" + `>
   inserted code
-  </with>
-  </replace>
+  ` + "\x3c/with" + `>
+  ` + "\x3c/replace" + `>
 
 - Delete file:
-  <delete path="path/to/file.ext" />
+  ` + "\x3cdelete" + ` path="path/to/file.ext" />
 `
 
 func main() {
@@ -90,6 +90,8 @@ func main() {
 		runInit(args)
 	case "scan":
 		runScan(args)
+	case "check", "validate":
+		runCheck(args)
 	case "start":
 		runStart(args)
 	case "signatures", "sig":
@@ -129,6 +131,7 @@ Usage:
 Core Commands:
   init                     Scan directory tree and generate textify.yaml
   scan                     Detect new directories and update textify.yaml
+  check, validate          Validate textify.yaml and inspect active directory rules
   start                    Bundle project codebase into context file
   signatures, sig          Export types, structs, interfaces, and function headers
   tokens, dirs             List included folders and estimated token sizes (largest to smallest)
@@ -238,9 +241,11 @@ func runScan(args []string) {
 	var existingCfg *config.Config
 	if _, err := os.Stat(*configPath); err == nil {
 		loaded, loadErr := config.Load(*configPath)
-		if loadErr == nil {
-			existingCfg = loaded
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", loadErr)
+			os.Exit(1)
 		}
+		existingCfg = loaded
 	}
 
 	cfg, err := config.Discover(cwd, existingCfg)
@@ -635,9 +640,12 @@ func runLoad(args []string) {
 
 	cfg := config.DefaultConfig()
 	if _, err := os.Stat(*configPath); err == nil {
-		if loaded, err := config.Load(*configPath); err == nil {
-			cfg = *loaded
+		loaded, loadErr := config.Load(*configPath)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", loadErr)
+			os.Exit(1)
 		}
+		cfg = *loaded
 	}
 
 	var buf bytes.Buffer
@@ -797,9 +805,11 @@ func runTokens(args []string) {
 	cfg := config.DefaultConfig()
 	if _, err := os.Stat(*configPath); err == nil {
 		loaded, loadErr := config.Load(*configPath)
-		if loadErr == nil {
-			cfg = *loaded
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", loadErr)
+			os.Exit(1)
 		}
+		cfg = *loaded
 	}
 
 	stats, err := scanner.CalculateFolderTokens(cwd, &cfg, scanner.ScanOptions{
@@ -848,6 +858,63 @@ func runTokens(args []string) {
 	}
 }
 
+func runCheck(args []string) {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	configPath := fs.String("config", "textify.yaml", "Configuration file path")
+	_ = fs.Parse(normalizeFlagArgs(args, map[string]bool{"--config": true, "-config": true}))
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(*configPath); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "❌ Configuration file %q not found.\nRun 'textify init' to generate a textify.yaml file.\n", *configPath)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	warnings := cfg.Validate(cwd)
+
+	fmt.Printf("✔ Configuration in %q is syntactically valid!\n\n", *configPath)
+	fmt.Printf("Output File: %s\n", cfg.OutputFile)
+	fmt.Printf("Format:      %s\n", cfg.Format)
+	fmt.Printf("Directories configured: %d\n\n", len(cfg.Dirs))
+
+	for dir, rule := range cfg.Dirs {
+		status := "enabled"
+		if !rule.Enabled {
+			status = "disabled"
+		}
+		fmt.Printf("  • %-24s [%s]", dir, status)
+		if len(rule.Extensions) > 0 {
+			fmt.Printf(" ext: [%s]", strings.Join(rule.Extensions, ", "))
+		}
+		if len(rule.Include) > 0 {
+			fmt.Printf(" include: %d rule(s)", len(rule.Include))
+		}
+		if len(rule.Exclude) > 0 {
+			fmt.Printf(" exclude: %d rule(s)", len(rule.Exclude))
+		}
+		fmt.Println()
+	}
+
+	if len(warnings) > 0 {
+		fmt.Printf("\n⚠️ Warnings / Suggestions (%d):\n", len(warnings))
+		for _, w := range warnings {
+			fmt.Printf("  - %s\n", w)
+		}
+	} else {
+		fmt.Println("\nAll directory rules look great! You are ready to run 'textify start'.")
+	}
+}
+
 type scanCmdParams struct {
 	configPath       string
 	format           string
@@ -873,9 +940,11 @@ func executeScan(p scanCmdParams) {
 	cfg := config.DefaultConfig()
 	if _, err := os.Stat(p.configPath); err == nil {
 		loaded, loadErr := config.Load(p.configPath)
-		if loadErr == nil {
-			cfg = *loaded
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", loadErr)
+			os.Exit(1)
 		}
+		cfg = *loaded
 	}
 
 	var buf bytes.Buffer

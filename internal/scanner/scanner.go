@@ -174,13 +174,15 @@ func collectFiles(
 			continue
 		}
 
-		entryRule := resolveEffectiveRule(relEntryPath, cfg, rootRule)
+		entryRule, baseDir := resolveEffectiveRuleWithBase(relEntryPath, cfg, rootRule)
 
-		if checkPatternMatch(entry.Name(), relEntryPath, entryRule.Exclude) {
+		// 1. Force Exclude (highest user priority)
+		if matchPattern(entry.Name(), relEntryPath, baseDir, entryRule.Exclude) {
 			continue
 		}
 
-		isForced := checkPatternMatch(entry.Name(), relEntryPath, entryRule.Include)
+		// 2. Force Include (overrides gitignore & extension filters)
+		isForced := matchPattern(entry.Name(), relEntryPath, baseDir, entryRule.Include)
 
 		if entry.IsDir() {
 			isIgnored := ignoreChain.Match(entryPath, true)
@@ -191,7 +193,7 @@ func collectFiles(
 			}
 
 			isExplicitlyEnabled := hasExplicitRule && explicitRule.Enabled
-			isDirForced := isForced || hasIncludePrefix(relEntryPath, entryRule.Include)
+			isDirForced := isForced || hasIncludePrefix(relEntryPath, baseDir, entryRule.Include)
 
 			if isIgnored && !isDirForced && !isExplicitlyEnabled {
 				continue
@@ -210,26 +212,31 @@ func collectFiles(
 			continue
 		}
 
+		// 3. Gitignore check (skipped if force-included)
 		if !isForced && ignoreChain.Match(entryPath, false) {
 			continue
 		}
 
+		// 4. Git diff check
 		if changedFiles != nil && !isForced {
 			if !changedFiles[relEntryPath] {
 				continue
 			}
 		}
 
+		// 5. Group filter
 		if len(targetGroups) > 0 && !containsCaseInsensitive(targetGroups, entryRule.Group) {
 			continue
 		}
 
+		// 6. Block-list extensions
 		if !isForced && len(entryRule.ExcludeExtensions) > 0 {
 			if contains(entryRule.ExcludeExtensions, ext) {
 				continue
 			}
 		}
 
+		// 7. Allow-list extensions
 		if !isForced && len(entryRule.Extensions) > 0 {
 			if !contains(entryRule.Extensions, ext) {
 				continue
@@ -247,24 +254,89 @@ func shouldAlwaysExclude(name, outputFile string) bool {
 	return name == ".git" || name == "textify.yaml" || name == outName
 }
 
-func checkPatternMatch(name, relPath string, patterns []string) bool {
+// matchPattern matches file/directory names or relative paths against rule patterns,
+// supporting exact matches, subfolder prefixes, name globs, and patterns relative
+// to the directory rule's base.
+func matchPattern(name, relPath, baseDir string, patterns []string) bool {
+	cleanRel := filepath.ToSlash(filepath.Clean(relPath))
+	nameLower := strings.ToLower(name)
+	relLower := strings.ToLower(cleanRel)
+
 	for _, p := range patterns {
-		if matched, _ := filepath.Match(p, name); matched {
+		pat := strings.TrimSpace(filepath.ToSlash(p))
+		pat = strings.TrimPrefix(pat, "/")
+		pat = strings.TrimSuffix(pat, "/")
+		if pat == "" {
+			continue
+		}
+
+		// Literal "." matches the directory rule itself
+		if pat == "." {
+			if cleanRel == baseDir || (baseDir == "." && cleanRel == ".") {
+				return true
+			}
+			continue
+		}
+
+		patLower := strings.ToLower(pat)
+
+		// 1. Direct match on file/directory base name (e.g. "errors.go" or "*.log")
+		if nameLower == patLower {
 			return true
 		}
-		if matched, _ := filepath.Match(p, relPath); matched {
+		if matched, _ := filepath.Match(patLower, nameLower); matched {
 			return true
 		}
-		if p == relPath {
+
+		// 2. Direct match relative to root
+		if relLower == patLower {
 			return true
+		}
+		if strings.HasPrefix(relLower, patLower+"/") {
+			return true
+		}
+		if matched, _ := filepath.Match(patLower, relLower); matched {
+			return true
+		}
+
+		// 3. Match relative to baseDir (when baseDir != ".")
+		if baseDir != "." && baseDir != "" {
+			var combined string
+			if !strings.HasPrefix(patLower, strings.ToLower(baseDir)+"/") {
+				combined = strings.ToLower(baseDir) + "/" + patLower
+			} else {
+				combined = patLower
+			}
+
+			if relLower == combined {
+				return true
+			}
+			if strings.HasPrefix(relLower, combined+"/") {
+				return true
+			}
+			if matched, _ := filepath.Match(combined, relLower); matched {
+				return true
+			}
+
+			// Subpath within baseDir
+			if strings.HasPrefix(relLower, strings.ToLower(baseDir)+"/") {
+				inner := strings.TrimPrefix(relLower, strings.ToLower(baseDir)+"/")
+				if inner == patLower || strings.HasPrefix(inner, patLower+"/") {
+					return true
+				}
+				if matched, _ := filepath.Match(patLower, inner); matched {
+					return true
+				}
+			}
 		}
 	}
+
 	return false
 }
 
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
-		if s == item {
+		if strings.EqualFold(s, item) {
 			return true
 		}
 	}
@@ -272,11 +344,17 @@ func contains(slice []string, item string) bool {
 }
 
 func resolveEffectiveRule(relPath string, cfg *config.Config, rootRule config.DirRule) config.DirRule {
+	r, _ := resolveEffectiveRuleWithBase(relPath, cfg, rootRule)
+	return r
+}
+
+func resolveEffectiveRuleWithBase(relPath string, cfg *config.Config, rootRule config.DirRule) (config.DirRule, string) {
 	effective := rootRule
+	effectiveBase := "."
 
 	cleanRel := filepath.ToSlash(filepath.Clean(relPath))
 	if cleanRel == "." || cleanRel == "" {
-		return effective
+		return effective, effectiveBase
 	}
 
 	parts := strings.Split(cleanRel, "/")
@@ -294,6 +372,7 @@ func resolveEffectiveRule(relPath string, cfg *config.Config, rootRule config.Di
 		}
 
 		effective.Enabled = rule.Enabled
+		effectiveBase = current
 
 		if rule.Compact {
 			effective.Compact = true
@@ -326,14 +405,29 @@ func resolveEffectiveRule(relPath string, cfg *config.Config, rootRule config.Di
 		}
 	}
 
-	return effective
+	return effective, effectiveBase
 }
 
-func hasIncludePrefix(relPath string, includes []string) bool {
-	prefix := relPath + "/"
+func hasIncludePrefix(relPath, baseDir string, includes []string) bool {
+	cleanRel := filepath.ToSlash(filepath.Clean(relPath))
+	prefix := cleanRel + "/"
+
 	for _, inc := range includes {
-		inc = filepath.ToSlash(inc)
-		if strings.HasPrefix(inc, prefix) {
+		inc = strings.TrimSpace(filepath.ToSlash(inc))
+		inc = strings.TrimPrefix(inc, "/")
+		inc = strings.TrimSuffix(inc, "/")
+		if inc == "" || inc == "." {
+			continue
+		}
+
+		var targetPath string
+		if baseDir != "." && baseDir != "" && !strings.HasPrefix(inc, baseDir+"/") {
+			targetPath = baseDir + "/" + inc
+		} else {
+			targetPath = inc
+		}
+
+		if strings.HasPrefix(targetPath, prefix) {
 			return true
 		}
 	}
