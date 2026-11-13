@@ -6,6 +6,7 @@ import (
 
 	"github.com/JohnEsleyer/textify/internal/targets/golang"
 	"github.com/JohnEsleyer/textify/internal/targets/jvm"
+	"github.com/JohnEsleyer/textify/internal/targets/rust"
 )
 
 // ParseGoFile delegates Go source parsing to the golang target package.
@@ -30,6 +31,11 @@ func ExtractCase(filePath, content, fnName, caseTarget string) (string, int, int
 		}
 	} else if ext == ".java" || ext == ".kt" || ext == ".kts" {
 		body, start, end, err := jvm.ExtractJVMCase(filePath, content, fnName, caseTarget)
+		if err == nil {
+			return body, start, end, nil
+		}
+	} else if ext == ".rs" {
+		body, start, end, err := rust.ExtractRustCase(filePath, content, fnName, caseTarget)
 		if err == nil {
 			return body, start, end, nil
 		}

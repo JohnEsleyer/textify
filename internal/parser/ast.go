@@ -33,10 +33,11 @@ const (
 	LangJava       Language = "java"
 	LangKotlin     Language = "kotlin"
 	LangJVM        Language = "jvm"
+	LangRust       Language = "rust"
 	LangAll        Language = "all"
 )
 
-// ParseLanguages parses a comma-separated list like "go,ts", "java", "kotlin", "jvm", or "all".
+// ParseLanguages parses a comma-separated list like "go,ts", "rust", "java", "kotlin", "jvm", or "all".
 func ParseLanguages(langStr string) map[Language]bool {
 	langs := make(map[Language]bool)
 	if langStr == "" || strings.EqualFold(strings.TrimSpace(langStr), "all") {
@@ -44,6 +45,7 @@ func ParseLanguages(langStr string) map[Language]bool {
 		langs[LangTypeScript] = true
 		langs[LangJava] = true
 		langs[LangKotlin] = true
+		langs[LangRust] = true
 		return langs
 	}
 	for _, l := range strings.Split(langStr, ",") {
@@ -59,6 +61,8 @@ func ParseLanguages(langStr string) map[Language]bool {
 		case "jvm":
 			langs[LangJava] = true
 			langs[LangKotlin] = true
+		case "rust", "rs":
+			langs[LangRust] = true
 		}
 	}
 	return langs

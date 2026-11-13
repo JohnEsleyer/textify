@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/JohnEsleyer/textify/internal/parser"
+	"github.com/JohnEsleyer/textify/internal/targets"
 )
 
 // ChangeType represents the kind of operation applied.
@@ -292,7 +293,7 @@ func applyReplace(filePath, content string, rep replaceDirective, fix bool) (str
 
 	// 2. AST Symbol Replacement
 	if rep.symbol != "" {
-		syms, err := parser.ParseGoFile(filePath, []byte(content))
+		syms, err := targets.ParseFile(filePath, []byte(content))
 		if err == nil {
 			for _, s := range syms {
 				if s.Name == rep.symbol || s.FullName() == rep.symbol {
@@ -355,7 +356,7 @@ func applyReplace(filePath, content string, rep replaceDirective, fix bool) (str
 	targetText := content
 	prefixOffset := 0
 	if rep.within != "" {
-		syms, err := parser.ParseGoFile(filePath, []byte(content))
+		syms, err := targets.ParseFile(filePath, []byte(content))
 		if err == nil {
 			for _, s := range syms {
 				if s.Name == rep.within || s.FullName() == rep.within || strings.HasSuffix(s.FullName(), "."+rep.within) {

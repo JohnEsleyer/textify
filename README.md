@@ -1,6 +1,6 @@
 # Textify ⚡
 
-[![Version](https://img.shields.io/badge/version-0.10.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -490,12 +490,12 @@ func main() {}
 | `textify tokens, dirs [flags]` | Lists included folders and estimated token sizes (largest to smallest). |
 | `textify diff [flags]` | Bundles only modified, staged, or untracked Git files. |
 | `textify trace <symbol> [flags]` | Traces function call flow and callee implementations (`--deep`, `--depth`). |
-| `textify def <symbol> [flags]` | Extracts AST definition of function/struct/class (Go/TypeScript/Java/Kotlin). |
+| `textify def <symbol> [flags]` | Extracts AST definition of function/struct/class (Go/TypeScript/Java/Kotlin/Rust). |
 | `textify grep <pattern> [flags]` | Searches pattern across workspace with context lines. |
 | `textify load [file] [flags]` | Reads request XML and outputs requested slices, traces, and files. |
 | `textify patch [file] [flags]` | Applies LLM patch bundle atomically using two-pass VFS. |
 | `textify prompt` | Prints copy-pasteable instructions for the LLM. |
-| `textify version` | Prints current version (`0.10.0`). |
+| `textify version` | Prints current version (`0.12.0`). |
 
 ### CLI Flags Cheat Sheet
 

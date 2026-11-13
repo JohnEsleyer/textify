@@ -242,6 +242,44 @@ func TestParseLanguages(t *testing.T) {
 	}
 }
 
+func TestRustIndexFlow(t *testing.T) {
+	dir := t.TempDir()
+	rustSrc := `pub struct Engine {
+    pub running: bool,
+}
+
+impl Engine {
+    pub fn start(&mut self) {
+        self.initialize();
+        self.running = true;
+    }
+
+    fn initialize(&mut self) {}
+}
+
+pub fn boot() {
+    let mut e = Engine { running: false };
+    e.start();
+}
+`
+	writeTestFile(t, dir, "engine.rs", rustSrc)
+
+	idx, err := BuildIndex(dir, ParseLanguages("rust"))
+	if err != nil {
+		t.Fatalf("BuildIndex failed: %v", err)
+	}
+
+	matches := idx.FindDefinition("Engine.start", "")
+	if len(matches) != 1 || matches[0].Name != "start" {
+		t.Fatalf("Engine.start matches = %+v", matches)
+	}
+
+	flow := idx.TraceFlow("boot", 5)
+	if !strings.Contains(flow, "boot()") || !strings.Contains(flow, "start()") {
+		t.Errorf("TraceFlow(boot) missing callees:\n%s", flow)
+	}
+}
+
 func TestJavaAndKotlinIndexFlow(t *testing.T) {
 	dir := t.TempDir()
 	javaSrc := `package sample;

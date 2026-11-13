@@ -30,24 +30,29 @@ dirs:
             - go
     internal:
         enabled: true
-            - .
-            - /config
-            - /fileutil
-            - /parser
-            - /scanner
-            - /targets/golang
+        include:
+            - config
+            - fileutil
+            - parser
+            - scanner
+            - targets/golang
             - errors.go
             - generic.go
             - registry_test.go
             - registry.go
             - symbol.go
         exclude:
-            - "/targets/html"
-            - "/targets/jvm"
-            - "/targets/react"
+            - targets/html
+            - targets/jvm
+            - targets/react
+            - targets/css
         extensions:
             - go
     _dev:
-        enabled: false
+        enabled: true
+        include:
+            - /docs
+        exclude:
+            - /scripts
         extensions:
             - md

@@ -11,6 +11,7 @@ import (
 	_ "github.com/JohnEsleyer/textify/internal/targets/html"
 	_ "github.com/JohnEsleyer/textify/internal/targets/jvm"
 	_ "github.com/JohnEsleyer/textify/internal/targets/react"
+	_ "github.com/JohnEsleyer/textify/internal/targets/rust"
 )
 
 // IsDocFile reports whether a file path points to a documentation file.

@@ -10,6 +10,7 @@ import (
 	_ "github.com/JohnEsleyer/textify/internal/targets/html"
 	_ "github.com/JohnEsleyer/textify/internal/targets/jvm"
 	_ "github.com/JohnEsleyer/textify/internal/targets/react"
+	_ "github.com/JohnEsleyer/textify/internal/targets/rust"
 )
 
 func TestRegistryDispatchesByFileTarget(t *testing.T) {
@@ -47,6 +48,11 @@ func TestRegistryDispatchesByFileTarget(t *testing.T) {
 			path:    "App.kt",
 			content: "package com.example\nfun run() {\n    println(1)\n}\n",
 			want:    "fun run() { /* ... */ }",
+		},
+		{
+			path:    "lib.rs",
+			content: "pub struct Config {\n    pub port: u16,\n}\n\npub fn run() {\n    println!(\"hello\");\n}\n",
+			want:    "pub fn run() { /* ... */ }",
 		},
 	}
 

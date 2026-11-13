@@ -85,6 +85,14 @@ func BuildIndex(root string, langs map[Language]bool) (*CodebaseIndex, error) {
 					fileSymbols = append(fileSymbols, syms...)
 				}
 			}
+		} else if ext == ".rs" && langs[LangRust] {
+			data, readErr := os.ReadFile(path)
+			if readErr == nil {
+				syms, parseErr := ParseRustFile(relPath, data)
+				if parseErr == nil {
+					fileSymbols = append(fileSymbols, syms...)
+				}
+			}
 		}
 
 		if len(fileSymbols) > 0 {

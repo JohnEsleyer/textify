@@ -15,7 +15,7 @@ import (
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.11.0"
+const version = "0.12.0"
 
 const defaultPrompt = `You are interacting with a codebase managed by Textify.
 
@@ -137,7 +137,7 @@ Core Commands:
   tokens, dirs             List included folders and estimated token sizes (largest to smallest)
   diff                     Bundle only modified, staged, or untracked Git files
   grep <pattern>           Search codebase for pattern with context lines
-  def <symbol>             Extract AST definition of function/struct/class (Go/TS/Java/Kotlin)
+  def <symbol>             Extract AST definition of function/struct/class (Go/TS/Java/Kotlin/Rust)
   trace <symbol>           Trace function execution call flow or type dependencies
   load [file]              Extract requested files, slices, searches, or AST symbols
   patch [file]             Safely apply multi-file LLM patches (atomic two-pass VFS)
@@ -460,7 +460,7 @@ func runGrep(args []string) {
 
 func runDef(args []string) {
 	fs := flag.NewFlagSet("def", flag.ExitOnError)
-	langFlag := fs.String("lang", "all", "Language filter (go, ts, java, kt, or all)")
+	langFlag := fs.String("lang", "all", "Language filter (go, ts, java, kt, rust, or all)")
 	pathFlag := fs.String("path", "", "Restrict lookup to specific file path")
 	clipFlag := fs.Bool("clip", false, "Copy definition directly to clipboard")
 	clipShort := fs.Bool("c", false, "Copy definition directly to clipboard (shorthand)")
