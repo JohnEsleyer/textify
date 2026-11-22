@@ -18,6 +18,7 @@ type ScanOptions struct {
 	SignaturesOnly   bool
 	DiffOnly         bool
 	ForceFull        bool
+	ScanOnly         bool
 	Format           string
 	MaxFileSize      int64
 	RedactSecrets    bool
@@ -39,6 +40,9 @@ type ScanResult struct {
 // Scan initiates the directory walk based on the provided configuration and options.
 func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOptions) (*ScanResult, error) {
 	chain := config.NewGitIgnoreChain(rootPath)
+	if opts.ScanOnly {
+		writer = io.Discard
+	}
 	bufWriter := bufio.NewWriter(writer)
 	defer bufWriter.Flush()
 
@@ -73,7 +77,10 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 		showTree = true
 	}
 
-	if showTree && len(matchedFiles) > 0 {
+	if opts.ScanOnly && opts.Tree && len(matchedFiles) > 0 {
+		fmt.Print(GenerateTree(matchedFiles))
+		fmt.Println(strings.Repeat("=", 60) + "\n")
+	} else if !opts.ScanOnly && showTree && len(matchedFiles) > 0 {
 		treeStr := GenerateTree(matchedFiles)
 		fmt.Fprint(bufWriter, treeStr)
 		fmt.Fprintln(bufWriter, strings.Repeat("=", 60)+"\n")
@@ -120,12 +127,18 @@ func Scan(rootPath string, cfg *config.Config, writer io.Writer, opts ScanOption
 			modeSuffix = " (full doc)"
 		} else if rule.Compact {
 			modeSuffix = " (compacted)"
+		} else if opts.ScanOnly {
+			modeSuffix = " (full code)"
 		}
 		if rule.Group != "" {
 			modeSuffix += fmt.Sprintf(" [group: %s]", rule.Group)
 		}
+		prefix := "Added"
+		if opts.ScanOnly {
+			prefix = "Scanned"
+		}
 		if !opts.Stdout {
-			fmt.Printf("Added: %s%s\n", relPath, modeSuffix)
+			fmt.Printf("%s: %s%s\n", prefix, relPath, modeSuffix)
 		}
 	}
 

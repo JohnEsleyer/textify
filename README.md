@@ -1,6 +1,6 @@
 # Textify ⚡
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue.svg)](https://github.com/JohnEsleyer/textify/releases)
 [![Go Version](https://img.shields.io/badge/go-1.18%2B-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -483,7 +483,7 @@ func main() {}
 | Command | Description |
 | :--- | :--- |
 | `textify init` | Scans workspace and creates `textify.yaml`. |
-| `textify scan` | Discovers new folders and appends them to `textify.yaml`. |
+| `textify scan [flags]` | Scans workspace and previews processed files and status (dry-run without persisting). |
 | `textify check` | Validates `textify.yaml` syntax, checks disk paths, and previews rules. |
 | `textify start [flags]` | Bundles full project codebase into context file (`--full` to force full code). |
 | `textify signatures, sig [flags]` | Extracts types, structs, interfaces, and function headers. |
@@ -495,7 +495,7 @@ func main() {}
 | `textify load [file] [flags]` | Reads request XML and outputs requested slices, traces, and files. |
 | `textify patch [file] [flags]` | Applies LLM patch bundle atomically using two-pass VFS. |
 | `textify prompt` | Prints copy-pasteable instructions for the LLM. |
-| `textify version` | Prints current version (`0.12.0`). |
+| `textify version` | Prints current version (`0.13.0`). |
 
 ### CLI Flags Cheat Sheet
 

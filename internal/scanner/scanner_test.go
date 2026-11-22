@@ -622,3 +622,33 @@ func TestScannerFollowsSubdirectoryIncludeExcludeWithSlashes(t *testing.T) {
 	// disabled folder
 	assertNotContains(t, out, "_dev/notes.md")
 }
+
+func TestScanScanOnly(t *testing.T) {
+	tempDir := t.TempDir()
+
+	createFile(t, tempDir, "main.go", "package main\nfunc main() {}\n")
+	createFile(t, tempDir, "README.md", "# Test\n")
+
+	cfg := &config.Config{
+		OutputFile: "codebase.txt",
+		Dirs: map[string]config.DirRule{
+			".": {
+				Enabled:    true,
+				Extensions: []string{"go", "md"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	res, err := Scan(tempDir, cfg, &buf, ScanOptions{ScanOnly: true, Tree: false})
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	if res.FilesCount != 2 {
+		t.Errorf("expected 2 files scanned, got %d", res.FilesCount)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected nothing written to buffer in ScanOnly mode, got %d bytes", buf.Len())
+	}
+}

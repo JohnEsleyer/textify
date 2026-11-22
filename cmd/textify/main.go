@@ -15,7 +15,7 @@ import (
 	"github.com/JohnEsleyer/textify/internal/scanner"
 )
 
-const version = "0.12.0"
+const version = "0.13.0"
 
 const defaultPrompt = `You are interacting with a codebase managed by Textify.
 
@@ -130,7 +130,7 @@ Usage:
 
 Core Commands:
   init                     Scan directory tree and generate textify.yaml
-  scan                     Detect new directories and update textify.yaml
+  scan                     Scan workspace and preview processed files and status (dry-run)
   check, validate          Validate textify.yaml and inspect active directory rules
   start                    Bundle project codebase into context file
   signatures, sig          Export types, structs, interfaces, and function headers
@@ -230,36 +230,43 @@ func runInit(args []string) {
 func runScan(args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	configPath := fs.String("config", "textify.yaml", "Configuration file path")
-	_ = fs.Parse(args)
+	treeFlag := fs.Bool("tree", false, "Prepend directory tree")
+	fullFlag := fs.Bool("full", false, "Force full code extraction for all files (ignore signatures groups)")
+	sigFlag := fs.Bool("signatures", false, "Scan with signatures only for all files")
+	sigShort := fs.Bool("sig", false, "Scan with signatures only (shorthand)")
+	diffFlag := fs.Bool("diff", false, "Scan only modified, staged, or untracked Git files")
+	sigGroupsFlag := fs.String("signatures-groups", "", "Comma-separated group names for signatures only")
+	sigGroupsShort := fs.String("sig-groups", "", "Comma-separated group names for signatures only (shorthand)")
+	fullGroupsFlag := fs.String("full-groups", "", "Comma-separated group names for full code")
+	fullGroupsShort := fs.String("full-code-groups", "", "Comma-separated group names for full code (alias)")
+	groupFlag := fs.String("group", "", "Only include directories/files in specific group(s)")
+	groupsFlag := fs.String("groups", "", "Only include directories/files in specific group(s) (alias)")
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting current directory: %v\n", err)
-		os.Exit(1)
+	valueFlags := map[string]bool{
+		"--config": true, "-config": true,
+		"--signatures-groups": true, "-signatures-groups": true,
+		"--sig-groups": true, "-sig-groups": true,
+		"--full-groups": true, "-full-groups": true,
+		"--full-code-groups": true, "-full-code-groups": true,
+		"--group": true, "-group": true, "--groups": true, "-groups": true,
 	}
+	_ = fs.Parse(normalizeFlagArgs(args, valueFlags))
 
-	var existingCfg *config.Config
-	if _, err := os.Stat(*configPath); err == nil {
-		loaded, loadErr := config.Load(*configPath)
-		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", loadErr)
-			os.Exit(1)
-		}
-		existingCfg = loaded
-	}
-
-	cfg, err := config.Discover(cwd, existingCfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error during discovery scan: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := cfg.Save(*configPath); err != nil {
-		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", *configPath, err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("✔ Updated %s (%d directories configured).\n", *configPath, len(cfg.Dirs))
+	executeScan(scanCmdParams{
+		configPath:       *configPath,
+		format:           "tags",
+		stdout:           false,
+		clip:             false,
+		redact:           false,
+		tree:             *treeFlag,
+		signaturesOnly:   *sigFlag || *sigShort,
+		diffOnly:         *diffFlag,
+		forceFull:        *fullFlag,
+		scanOnly:         true,
+		signaturesGroups: splitCommaList(firstNonEmpty(*sigGroupsFlag, *sigGroupsShort)),
+		fullCodeGroups:   splitCommaList(firstNonEmpty(*fullGroupsFlag, *fullGroupsShort)),
+		targetGroups:     splitCommaList(firstNonEmpty(*groupFlag, *groupsFlag)),
+	})
 }
 
 func runStart(args []string) {
@@ -925,6 +932,7 @@ type scanCmdParams struct {
 	signaturesOnly   bool
 	diffOnly         bool
 	forceFull        bool
+	scanOnly         bool
 	signaturesGroups []string
 	fullCodeGroups   []string
 	targetGroups     []string
@@ -951,7 +959,7 @@ func executeScan(p scanCmdParams) {
 	var writer io.Writer = &buf
 
 	var fileOut *os.File
-	if !p.stdout && !p.clip {
+	if !p.scanOnly && !p.stdout && !p.clip {
 		outFile := cfg.OutputFile
 		if outFile == "" {
 			outFile = "codebase.txt"
@@ -964,12 +972,15 @@ func executeScan(p scanCmdParams) {
 		defer f.Close()
 		fileOut = f
 		writer = io.MultiWriter(&buf, fileOut)
+	} else if p.scanOnly {
+		writer = io.Discard
 	}
 
 	scanRes, err := scanner.Scan(cwd, &cfg, writer, scanner.ScanOptions{
 		SignaturesOnly:   p.signaturesOnly,
 		DiffOnly:         p.diffOnly,
 		ForceFull:        p.forceFull,
+		ScanOnly:         p.scanOnly,
 		Format:           p.format,
 		RedactSecrets:    p.redact,
 		Tree:             p.tree,
@@ -998,6 +1009,15 @@ func executeScan(p scanCmdParams) {
 			if !p.stdout {
 				fmt.Print(output)
 			}
+		}
+	} else if p.scanOnly {
+		fmt.Printf("\n✔ Scanned %d files (%s, ~%d tokens) [no files written]\n",
+			scanRes.FilesCount,
+			formatBytes(scanRes.TotalBytes),
+			scanRes.ApproxTokens,
+		)
+		if scanRes.RedactedSecrets > 0 {
+			fmt.Printf("🛡️ Redacted %d sensitive secrets/tokens.\n", scanRes.RedactedSecrets)
 		}
 	} else if !p.stdout {
 		fmt.Printf("\n✔ Bundled %d files (%s, ~%d tokens) into %s\n",

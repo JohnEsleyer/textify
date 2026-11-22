@@ -56,7 +56,7 @@ const configHeader = `# ========================================================
 #
 # COMMON CLI COMMANDS:
 #   textify check              Validate textify.yaml and inspect active directory rules.
-#   textify scan               Auto-detect new folders and update textify.yaml.
+#   textify scan               Scan workspace and preview processed files and status (dry-run).
 #   textify start              Bundle full project codebase into context file.
 #   textify signatures         Export symbol signatures (functions, structs, classes).
 #   textify tokens             List folders and estimated token sizes.
